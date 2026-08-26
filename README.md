@@ -10,6 +10,8 @@ The official release embeds access to the private pack. No separate configuratio
 
 The updater checks the latest GitHub release when it opens. It can download, verify, replace, and restart itself when a newer release is available. A commit alone does not trigger client updates; publish a newer versioned release.
 
+Use **Apply Hotfix** to update Item Preview QoL in an existing compatible installation.
+
 ## Full-pack installation
 
 1. Start with a fresh combined SPT 4.1.3 installation backed by EFT build 40743.

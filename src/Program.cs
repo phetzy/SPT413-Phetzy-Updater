@@ -79,6 +79,12 @@ internal static class Program
             }
         }
 
+        if (args.Length == 1 && args[0].Equals("--check-ui-label", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.WriteLine(UpdaterForm.ApplyButtonLabel);
+            return 0;
+        }
+
         if (args.Length == 2 && args[0].Equals("--generate-cloudfront-key", StringComparison.OrdinalIgnoreCase))
         {
             try
@@ -141,6 +147,7 @@ internal static class Program
 
 internal sealed class UpdaterForm : Form
 {
+    internal const string ApplyButtonLabel = "Apply Hotfix";
     private const string ExpectedEftVersion = "0.16.9.40743";
     private const string ExpectedSptVersion = "4.1.3";
     private const string PayloadResource = "Phetzy.Spt413Updater.Payload.JBOBYH_ItemPreviewQoL.dll";
@@ -151,7 +158,7 @@ internal sealed class UpdaterForm : Form
     private readonly TextBox _installPath = new() { Dock = DockStyle.Fill };
     private readonly Button _browse = new() { Text = "Browse…", AutoSize = true };
     private readonly Button _installPack = new() { Text = "Fresh install from private pack", AutoSize = true };
-    private readonly Button _apply = new() { Text = "Apply inspect-rotation hotfix", AutoSize = true };
+    private readonly Button _apply = new() { Text = ApplyButtonLabel, AutoSize = true };
     private readonly Button _checkUpdater = new() { Text = "Check for updater updates", AutoSize = true };
     private readonly ProgressBar _progress = new() { Dock = DockStyle.Fill, Minimum = 0, Maximum = 100, Style = ProgressBarStyle.Continuous };
     private readonly Label _phase = new() { Text = "Select your combined SPT installation folder.", AutoSize = true };
