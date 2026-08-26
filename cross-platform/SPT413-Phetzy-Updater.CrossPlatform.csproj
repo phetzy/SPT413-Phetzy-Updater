@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName Condition="'$(RuntimeIdentifier)' == 'linux-x64'">SPT413-Phetzy-Updater.Linux</AssemblyName>
+    <AssemblyName Condition="'$(RuntimeIdentifier)' != 'linux-x64'">SPT413-Phetzy-Updater</AssemblyName>
+    <Version>1.1.0</Version>
+    <FileVersion>1.1.0.0</FileVersion>
+    <Product>SPT 4.1.3 Phetzy Updater</Product>
+    <Description>Validated cross-platform installer for the SPT 4.1.3 friends pack.</Description>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="12.1.1" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.1.1" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.1" />
+    <PackageReference Include="SharpCompress" Version="0.50.4" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(PrivateManifestSource)')">
+    <EmbeddedResource Include="$(PrivateManifestSource)"
+                      LogicalName="Phetzy.Spt413Updater.PrivatePack.updater-source.json" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(HotfixPayload)')">
+    <EmbeddedResource Include="$(HotfixPayload)"
+                      LogicalName="Phetzy.Spt413Updater.Payload.JBOBYH_ItemPreviewQoL.dll" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="SPT413-Phetzy-Updater.CrossPlatform.Tests" />
+  </ItemGroup>
+</Project>

@@ -1,14 +1,24 @@
 # SPT 4.1.3 Phetzy Updater
 
-Windows GUI installer and hotfix utility for the private SPT 4.1.3 friends pack.
+Native Windows and Linux GUI installer and hotfix utility for the private SPT 4.1.3 friends pack.
 
 ## Download
 
-Download the latest ZIP from this repository's Releases page. Extract the complete ZIP before running `SPT413-Phetzy-Updater.exe`.
+Download the ZIP for your operating system from this repository's Releases page and extract it before running:
+
+- Windows x64: `SPT413-Phetzy-Updater.exe`
+- Linux x64: `SPT413-Phetzy-Updater.Linux`
+
+On Linux, make the downloaded file executable if the archive tool did not preserve its mode:
+
+```bash
+chmod +x SPT413-Phetzy-Updater.Linux
+./SPT413-Phetzy-Updater.Linux
+```
 
 The official release embeds access to the private pack. No separate configuration or AWS credentials are required.
 
-The updater checks the latest GitHub release when it opens. It can download, verify, replace, and restart itself when a newer release is available. A commit alone does not trigger client updates; publish a newer versioned release.
+The updater checks the latest GitHub release when it opens. It selects the Windows or Linux asset automatically, then can download, verify, replace, and restart itself. A commit alone does not trigger client updates; publish a newer versioned release.
 
 Use **Apply Hotfix** to update Item Preview QoL in an existing compatible installation.
 
@@ -23,11 +33,15 @@ The updater validates the target version and existing-mod state. It downloads th
 
 ## Build
 
-Use the .NET 10 SDK on Windows:
+Use the .NET 10 SDK:
 
 ```powershell
-dotnet publish .\src\SPT413-Phetzy-Updater.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
+dotnet test .\cross-platform.tests\SPT413-Phetzy-Updater.CrossPlatform.Tests.csproj -c Release
+dotnet publish .\cross-platform\SPT413-Phetzy-Updater.CrossPlatform.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
+dotnet publish .\cross-platform\SPT413-Phetzy-Updater.CrossPlatform.csproj -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=true
 ```
+
+Release builds supply `PrivateManifestSource` and `HotfixPayload` MSBuild properties. The repository workflow reads the private source from the `PHETZY_UPDATER_SOURCE_JSON_B64` Actions secret.
 
 The Item Preview QoL hotfix payload is included under its MIT license. See `THIRD_PARTY_LICENSES/ItemPreviewQoL-MIT.txt`.
 
@@ -35,4 +49,4 @@ The Item Preview QoL hotfix payload is included under its MIT license. See `THIR
 
 The official release embeds bearer access to the private pack. Do not mirror or repost the updater. Local source builds without the private embedded resource can still use an adjacent `updater-source.json` for development.
 
-The executable is not Authenticode-signed. Verify the release asset against its accompanying `.sha256` file before running it.
+The executables are not code-signed. Verify the release ZIP against its accompanying `.sha256` file before running it.

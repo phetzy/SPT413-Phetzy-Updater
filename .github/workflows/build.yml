@@ -1,0 +1,90 @@
+name: Cross-platform updater
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  DOTNET_VERSION: 10.0.x
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+      - name: Test archive safety
+        run: dotnet test cross-platform.tests/SPT413-Phetzy-Updater.CrossPlatform.Tests.csproj -c Release
+      - name: Publish Windows x64
+        run: >-
+          dotnet publish cross-platform/SPT413-Phetzy-Updater.CrossPlatform.csproj
+          -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
+          -o publish/windows
+      - name: Publish Linux x64
+        run: >-
+          dotnet publish cross-platform/SPT413-Phetzy-Updater.CrossPlatform.csproj
+          -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=true
+          -o publish/linux
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+      - name: Materialize private source
+        env:
+          PRIVATE_SOURCE_B64: ${{ secrets.PHETZY_UPDATER_SOURCE_JSON_B64 }}
+        run: |
+          test -n "$PRIVATE_SOURCE_B64"
+          printf '%s' "$PRIVATE_SOURCE_B64" | base64 --decode > "$RUNNER_TEMP/updater-source.json"
+      - name: Publish release binaries
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if ! printf '%s' "$version" | grep -qE '^[0-9]+(\.[0-9]+){1,3}$'; then
+            echo "Tag $GITHUB_REF_NAME is not a version" >&2
+            exit 1
+          fi
+          dotnet publish cross-platform/SPT413-Phetzy-Updater.CrossPlatform.csproj \
+            -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true \
+            -p:Version="$version" \
+            -p:PrivateManifestSource="$RUNNER_TEMP/updater-source.json" \
+            -p:HotfixPayload="$GITHUB_WORKSPACE/src/payload/JBOBYH_ItemPreviewQoL.dll" \
+            -o publish/windows
+          dotnet publish cross-platform/SPT413-Phetzy-Updater.CrossPlatform.csproj \
+            -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=true \
+            -p:Version="$version" \
+            -p:PrivateManifestSource="$RUNNER_TEMP/updater-source.json" \
+            -p:HotfixPayload="$GITHUB_WORKSPACE/src/payload/JBOBYH_ItemPreviewQoL.dll" \
+            -o publish/linux
+      - name: Verify embedded private source
+        run: |
+          chmod +x publish/linux/SPT413-Phetzy-Updater.Linux
+          publish/linux/SPT413-Phetzy-Updater.Linux --check-embedded-source
+      - name: Package assets
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p package/windows package/linux release
+          cp publish/windows/SPT413-Phetzy-Updater.exe package/windows/
+          cp publish/linux/SPT413-Phetzy-Updater.Linux package/linux/
+          cp README.md package/windows/ package/linux/
+          cp -r THIRD_PARTY_LICENSES package/windows/ package/linux/
+          chmod +x package/linux/SPT413-Phetzy-Updater.Linux
+          (cd package/windows && zip -r "../../release/SPT413-Phetzy-Updater-Windows-$version.zip" .)
+          (cd package/linux && zip -r "../../release/SPT413-Phetzy-Updater-Linux-$version.zip" .)
+          (cd release && sha256sum *.zip | while read -r hash file; do printf '%s  %s\n' "$hash" "$file" > "$file.sha256"; done)
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" release/* --generate-notes --title "$GITHUB_REF_NAME"
