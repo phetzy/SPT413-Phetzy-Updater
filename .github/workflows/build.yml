@@ -78,8 +78,10 @@ jobs:
           mkdir -p package/windows package/linux release
           cp publish/windows/SPT413-Phetzy-Updater.exe package/windows/
           cp publish/linux/SPT413-Phetzy-Updater.Linux package/linux/
-          cp README.md package/windows/ package/linux/
-          cp -r THIRD_PARTY_LICENSES package/windows/ package/linux/
+          cp README.md package/windows/
+          cp README.md package/linux/
+          cp -r THIRD_PARTY_LICENSES package/windows/
+          cp -r THIRD_PARTY_LICENSES package/linux/
           chmod +x package/linux/SPT413-Phetzy-Updater.Linux
           (cd package/windows && zip -r "../../release/SPT413-Phetzy-Updater-Windows-$version.zip" .)
           (cd package/linux && zip -r "../../release/SPT413-Phetzy-Updater-Linux-$version.zip" .)
