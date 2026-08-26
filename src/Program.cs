@@ -63,6 +63,22 @@ internal static class Program
             }
         }
 
+        if (args.Length == 1 && args[0].Equals("--check-embedded-source", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                UpdaterForm.ValidateEmbeddedSource();
+                Console.WriteLine("EMBEDDED SOURCE VALID");
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine(ex.Message);
+                WriteCliError(ex);
+                return 1;
+            }
+        }
+
         if (args.Length == 2 && args[0].Equals("--generate-cloudfront-key", StringComparison.OrdinalIgnoreCase))
         {
             try
@@ -128,6 +144,7 @@ internal sealed class UpdaterForm : Form
     private const string ExpectedEftVersion = "0.16.9.40743";
     private const string ExpectedSptVersion = "4.1.3";
     private const string PayloadResource = "Phetzy.Spt413Updater.Payload.JBOBYH_ItemPreviewQoL.dll";
+    private const string SourceResource = "Phetzy.Spt413Updater.PrivatePack.updater-source.json";
     private const string NewHash = "C20A912CE1A83DBC260D8A843A64AC8A0F03B26FCD9E43A24CE8670C0B8A17E2";
     private const string OldHash = "4D1886B66F3F9B3BE1D28D18B68AB664407659E6CE8DB1DA05329170564E24B6";
 
@@ -427,11 +444,7 @@ internal sealed class UpdaterForm : Form
 
     internal static string InstallFullPack(string selectedPath, IProgress<UpdateProgress> progress)
     {
-        var sourcePath = Path.Combine(AppContext.BaseDirectory, "updater-source.json");
-        if (!File.Exists(sourcePath))
-            throw new FileNotFoundException("Private-pack source configuration is missing.", sourcePath);
-        var source = JsonSerializer.Deserialize<UpdaterSource>(File.ReadAllText(sourcePath), JsonOptions)
-            ?? throw new InvalidOperationException("Private-pack source configuration is invalid.");
+        var source = LoadUpdaterSource();
         if (!TryHttpsUri(source.ManifestUrl, out var manifestUri))
             throw new InvalidOperationException("The private manifest URL is not a valid HTTPS URL.");
 
@@ -509,6 +522,47 @@ internal sealed class UpdaterForm : Form
     }
 
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
+
+    internal static void ValidateEmbeddedSource()
+    {
+        using var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream(SourceResource)
+            ?? throw new InvalidOperationException("The embedded private-pack source is missing.");
+        using var reader = new StreamReader(resource);
+        var source = JsonSerializer.Deserialize<UpdaterSource>(reader.ReadToEnd(), JsonOptions)
+            ?? throw new InvalidOperationException("The embedded private-pack source is invalid.");
+        if (!Uri.TryCreate(source.ManifestUrl, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps || string.IsNullOrWhiteSpace(uri.Query))
+            throw new InvalidOperationException("The embedded private-pack source is not a signed HTTPS URL.");
+    }
+
+    private static UpdaterSource LoadUpdaterSource()
+    {
+        var adjacent = Path.Combine(AppContext.BaseDirectory, "updater-source.json");
+        string json;
+        if (Environment.GetEnvironmentVariable("PHETZY_UPDATER_FIXTURE_MODE") == "1" && File.Exists(adjacent))
+        {
+            json = File.ReadAllText(adjacent);
+        }
+        else
+        {
+            using var resource = Assembly.GetExecutingAssembly().GetManifestResourceStream(SourceResource);
+            if (resource is not null)
+            {
+                using var reader = new StreamReader(resource);
+                json = reader.ReadToEnd();
+            }
+            else if (File.Exists(adjacent))
+            {
+                json = File.ReadAllText(adjacent);
+            }
+            else
+            {
+                throw new InvalidOperationException("The private-pack source is not embedded in this updater build.");
+            }
+        }
+
+        return JsonSerializer.Deserialize<UpdaterSource>(json, JsonOptions)
+            ?? throw new InvalidOperationException("The private-pack source configuration is invalid.");
+    }
 
     private static string ValidateSptRoot(string selectedPath, bool requireItemPreview)
     {
