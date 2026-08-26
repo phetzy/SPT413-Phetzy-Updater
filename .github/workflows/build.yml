@@ -84,6 +84,7 @@ jobs:
           cp -r THIRD_PARTY_LICENSES package/linux/
           chmod +x package/linux/SPT413-Phetzy-Updater.Linux
           (cd package/windows && zip -r "../../release/SPT413-Phetzy-Updater-Windows-$version.zip" .)
+          (cd package/windows && zip -r "../../release/SPT413-Phetzy-Updater-GitHub-$version.zip" .)
           (cd package/linux && zip -r "../../release/SPT413-Phetzy-Updater-Linux-$version.zip" .)
           (cd release && sha256sum *.zip | while read -r hash file; do printf '%s  %s\n' "$hash" "$file" > "$file.sha256"; done)
       - name: Publish GitHub release
