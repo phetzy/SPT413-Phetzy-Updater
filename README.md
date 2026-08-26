@@ -2,6 +2,9 @@
 
 Native Windows and Linux GUI installer and hotfix utility for the private SPT 4.1.3 friends pack.
 
+> **Important:** Release 1.1.2 omitted Avalonia's native renderer libraries and can exit before opening its window.
+> Download 1.1.3 or newer manually. A broken 1.1.2 copy cannot reach its normal self-update screen.
+
 ## Download
 
 Download the ZIP for your operating system from this repository's Releases page and extract it before running:
@@ -17,6 +20,9 @@ chmod +x SPT413-Phetzy-Updater.Linux
 ```
 
 The official release embeds access to the private pack. No separate configuration or AWS credentials are required.
+
+Release builds run native-runtime smoke checks on Windows and Linux. They also verify that the embedded private
+channel can read its manifest and the S3-backed bundle endpoint before GitHub publishes the assets.
 
 The updater checks the latest GitHub release when it opens. It selects the Windows or Linux asset automatically, then can download, verify, replace, and restart itself. A commit alone does not trigger client updates; publish a newer versioned release.
 

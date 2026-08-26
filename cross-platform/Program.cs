@@ -26,6 +26,20 @@ internal static class Program
                 return 0;
             }
 
+            if (args.Length == 1 && args[0] == "--check-native-runtime")
+            {
+                _ = new SkiaSharp.SKImageInfo(1, 1).ColorType;
+                Console.WriteLine("NATIVE RUNTIME VALID");
+                return 0;
+            }
+
+            if (args.Length == 1 && args[0] == "--check-private-channel")
+            {
+                var engine = new PackInstallEngine();
+                Console.WriteLine(engine.CheckPrivateChannelAsync().GetAwaiter().GetResult());
+                return 0;
+            }
+
             if (args.Length == 2 && args[0] == "--validate")
             {
                 Console.WriteLine(PackInstallEngine.ValidateTarget(args[1], requireFresh: true));

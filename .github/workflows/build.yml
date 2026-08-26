@@ -31,9 +31,28 @@ jobs:
           dotnet publish cross-platform/SPT413-Phetzy-Updater.CrossPlatform.csproj
           -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=true
           -o publish/linux
+      - name: Smoke-test Linux native runtime
+        run: |
+          chmod +x publish/linux/SPT413-Phetzy-Updater.Linux
+          publish/linux/SPT413-Phetzy-Updater.Linux --check-native-runtime
+
+  windows-runtime-smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+      - name: Publish Windows x64
+        run: >-
+          dotnet publish cross-platform/SPT413-Phetzy-Updater.CrossPlatform.csproj
+          -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
+          -o publish/windows
+      - name: Smoke-test Windows native runtime
+        run: ./publish/windows/SPT413-Phetzy-Updater.exe --check-native-runtime
 
   release:
-    needs: build
+    needs: [build, windows-runtime-smoke]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -72,6 +91,8 @@ jobs:
         run: |
           chmod +x publish/linux/SPT413-Phetzy-Updater.Linux
           publish/linux/SPT413-Phetzy-Updater.Linux --check-embedded-source
+          publish/linux/SPT413-Phetzy-Updater.Linux --check-native-runtime
+          publish/linux/SPT413-Phetzy-Updater.Linux --check-private-channel
       - name: Package assets
         run: |
           version="${GITHUB_REF_NAME#v}"

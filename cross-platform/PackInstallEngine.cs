@@ -110,6 +110,37 @@ internal sealed class PackInstallEngine
         _ = LoadSource(required: true);
     }
 
+    internal async Task<string> CheckPrivateChannelAsync(CancellationToken cancellationToken = default)
+    {
+        var source = LoadSource(required: true);
+        if (!Uri.TryCreate(source.ManifestUrl, UriKind.Absolute, out var manifestUri) ||
+            manifestUri.Scheme != Uri.UriSchemeHttps)
+            throw new InvalidOperationException("The embedded manifest URL is not valid HTTPS.");
+
+        var manifestJson = await _httpClient.GetStringAsync(manifestUri, cancellationToken);
+        var manifest = JsonSerializer.Deserialize<PackManifest>(manifestJson, JsonOptions)
+                       ?? throw new InvalidOperationException("The private pack manifest is invalid.");
+        ValidateManifest(manifest);
+
+        if (!Uri.TryCreate(manifest.Bundle.Url, UriKind.Absolute, out var bundleUri) ||
+            bundleUri.Scheme != Uri.UriSchemeHttps)
+            throw new InvalidOperationException("The private bundle URL is not valid HTTPS.");
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, bundleUri);
+        request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(0, 0);
+        using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        var remoteBytes = response.Content.Headers.ContentRange?.Length ??
+                          response.Content.Headers.ContentLength;
+        if (remoteBytes is not null && remoteBytes.Value != manifest.Bundle.Bytes)
+            throw new InvalidOperationException(
+                $"The private bundle size does not match its manifest: {remoteBytes.Value} != {manifest.Bundle.Bytes}.");
+
+        return "PRIVATE CHANNEL VALID";
+    }
+
     internal async Task<string> InstallFromChannelAsync(string selectedPath, IProgress<InstallProgress> progress,
         CancellationToken cancellationToken = default)
     {
