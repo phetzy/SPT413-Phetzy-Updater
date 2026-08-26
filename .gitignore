@@ -1,0 +1,5 @@
+bin/
+obj/
+updater-source.json
+updater-cli-error.log
+
