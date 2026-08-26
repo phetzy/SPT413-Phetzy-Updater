@@ -283,17 +283,19 @@ internal sealed class PackInstallEngine
         {
             try
             {
-                var path = process.MainModule?.FileName;
+                string? path;
+                try
+                {
+                    path = process.MainModule?.FileName;
+                }
+                catch
+                {
+                    // The process exited, or belongs to a user whose executable path is inaccessible.
+                    continue;
+                }
+
                 if (path is not null && IsWithin(path, root))
                     throw new InvalidOperationException($"Close {process.ProcessName} before modifying this SPT folder.");
-            }
-            catch (InvalidOperationException)
-            {
-                throw;
-            }
-            catch
-            {
-                // Processes owned by other users may not expose their executable path.
             }
             finally
             {
