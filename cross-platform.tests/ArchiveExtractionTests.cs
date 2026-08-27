@@ -23,6 +23,18 @@ public sealed class ArchiveExtractionTests : IDisposable
     }
 
     [Fact]
+    public void ExtractsWindowsSeparatorEntriesIntoPlatformDirectories()
+    {
+        var archivePath = CreateArchive((@"BepInEx\plugins\example.dll", "payload"));
+        var output = Path.Combine(_root, "windows-separator-output");
+        Directory.CreateDirectory(output);
+
+        PackInstallEngine.ExtractModArchive(archivePath, output);
+
+        Assert.Equal("payload", File.ReadAllText(Path.Combine(output, "BepInEx", "plugins", "example.dll")));
+    }
+
+    [Fact]
     public void RejectsTraversalBeforeWritingAnyFiles()
     {
         var archivePath = CreateArchive(
