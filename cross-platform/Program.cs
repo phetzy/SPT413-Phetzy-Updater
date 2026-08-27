@@ -39,6 +39,13 @@ internal static class Program
                 return 0;
             }
 
+            if (args.Length == 1 && args[0] == "--check-self-update-extraction")
+            {
+                UpdaterSelfUpdate.ValidateArchiveExtractionRuntime();
+                Console.WriteLine("SELF-UPDATE EXTRACTION VALID");
+                return 0;
+            }
+
             if (args.Length == 1 && args[0] == "--check-private-channel")
             {
                 var engine = new PackInstallEngine();

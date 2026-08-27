@@ -142,6 +142,37 @@ internal static class UpdaterSelfUpdate
             ? HandoffStrategy.AtomicReplaceAndParentAwareRestart
             : HandoffStrategy.HelperAfterExit;
 
+    internal static void ValidateArchiveExtractionRuntime()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"phetzy-self-update-smoke-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var archivePath = Path.Combine(root, "updater.zip");
+            using (var stream = File.Create(archivePath))
+            using (var archive = new ZipArchive(stream, ZipArchiveMode.Create))
+            {
+                var entry = archive.CreateEntry(UpdaterFileName());
+                using var writer = new StreamWriter(entry.Open());
+                writer.Write("verified updater payload");
+            }
+
+            var outputPath = Path.Combine(root, UpdaterFileName());
+            using (var archive = ZipFile.OpenRead(archivePath))
+            {
+                var entry = archive.Entries.Single(item => item.FullName == UpdaterFileName());
+                entry.ExtractToFile(outputPath, true);
+            }
+
+            if (File.ReadAllText(outputPath) != "verified updater payload")
+                throw new InvalidOperationException("Self-update extraction smoke test produced the wrong payload.");
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
     internal static ProcessStartInfo PrepareLinuxAtomicReplacement(
         string targetPath,
         string replacementPath,
