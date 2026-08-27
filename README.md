@@ -3,7 +3,7 @@
 Native Windows and Linux GUI installer and hotfix utility for the private SPT 4.1.3 friends pack.
 
 > **Important:** Release 1.1.2 omitted Avalonia's native renderer libraries and can exit before opening its window.
-> Download 1.1.5 or newer manually. Version 1.1.2 cannot reach its normal self-update screen, Linux 1.1.3 cannot begin an installation, and Linux 1.1.4 cannot validate EFT when its Windows version metadata is unavailable.
+> Download 1.1.6 or newer manually. Earlier Linux builds had native-runtime, UI-thread, EFT-validation, automatic-relaunch, or progress-display defects.
 
 ## Download
 

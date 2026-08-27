@@ -166,7 +166,9 @@ internal sealed class PackInstallEngine
         try
         {
             await DownloadBundleAsync(manifest.Bundle, bundlePath, progress, cancellationToken);
-            return await InstallFromBundleAsync(root, bundlePath, progress, cancellationToken);
+            var installProgress = new InlineProgress<InstallProgress>(update =>
+                progress.Report(MapDownloadedBundleProgress(update)));
+            return await InstallFromBundleAsync(root, bundlePath, installProgress, cancellationToken);
         }
         finally
         {
@@ -198,7 +200,7 @@ internal sealed class PackInstallEngine
             if (!actual.Equals(expected[relative], StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException($"Archive checksum mismatch: {relative}");
             progress.Report(new(5 + (index + 1) * 25 / order.Count,
-                $"Verifying bundled archives — {index + 1} / {order.Count}", relative));
+                "Verifying bundled archives", $"{index + 1} / {order.Count} — {relative}"));
         }
 
         var scratch = Path.Combine(Path.GetTempPath(), $"phetzy-spt-install-{Guid.NewGuid():N}");
@@ -214,7 +216,7 @@ internal sealed class PackInstallEngine
                 ExtractModArchive(tempArchive, root);
                 TryDelete(tempArchive);
                 progress.Report(new(30 + (index + 1) * 58 / order.Count,
-                    $"Installing verified archives — {index + 1} / {order.Count}", relative));
+                    "Installing verified archives", $"{index + 1} / {order.Count} — {relative}"));
             }
 
             CopyBundledSettings(entries, root);
@@ -371,14 +373,26 @@ internal sealed class PackInstallEngine
                 1024 * 1024, true);
             var buffer = new byte[1024 * 1024];
             long written = 0;
+            var started = Stopwatch.GetTimestamp();
+            var lastReport = started;
+            var lastTransferPercent = -1;
             int read;
             while ((read = await input.ReadAsync(buffer, cancellationToken)) > 0)
             {
                 await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
                 written += read;
                 var percent = bundle.Bytes == 0 ? 0 : (int)Math.Min(100, written * 100 / bundle.Bytes);
-                progress.Report(new(4 + percent * 20 / 100, $"Downloading mod pack — {percent}%",
-                    $"{written:N0} / {bundle.Bytes:N0} bytes"));
+                var now = Stopwatch.GetTimestamp();
+                var reportDue = percent != lastTransferPercent ||
+                                Stopwatch.GetElapsedTime(lastReport, now) >= TimeSpan.FromMilliseconds(250) ||
+                                written == bundle.Bytes;
+                if (reportDue)
+                {
+                    progress.Report(new(4 + percent * 20 / 100, "Downloading mod pack",
+                        $"{percent}% — {ProgressPresentation.FormatTransferDetail(written, bundle.Bytes, Stopwatch.GetElapsedTime(started, now))}"));
+                    lastTransferPercent = percent;
+                    lastReport = now;
+                }
             }
 
             await output.FlushAsync(cancellationToken);
@@ -629,6 +643,13 @@ internal sealed class PackInstallEngine
     }
 
     internal sealed record InstallProgress(int Percent, string Phase, string? Detail);
+    internal static InstallProgress MapDownloadedBundleProgress(InstallProgress update) =>
+        update with { Percent = 25 + Math.Clamp(update.Percent, 0, 100) * 75 / 100 };
+
+    private sealed class InlineProgress<T>(Action<T> report) : IProgress<T>
+    {
+        public void Report(T value) => report(value);
+    }
     private sealed record UpdaterSource(string ManifestUrl);
     private sealed record PackManifest(int SchemaVersion, string SptVersion, string EftVersion, BundleEntry Bundle);
     private sealed record BundleEntry(string FileName, string Url, long Bytes, string Sha256);

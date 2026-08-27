@@ -12,6 +12,12 @@ internal static class Program
             if (args.Length == 3 && args[0] == "--replace-updater")
                 return UpdaterSelfUpdate.ReplaceRunningUpdater(args[1], int.Parse(args[2]));
 
+            if (args.Length == 2 && args[0] == "--wait-for-parent")
+            {
+                UpdaterSelfUpdate.WaitForParent(int.Parse(args[1]));
+                args = [];
+            }
+
             if (args.Length == 1 && args[0] == "--check-updater")
             {
                 var release = UpdaterSelfUpdate.CheckAsync().GetAwaiter().GetResult();

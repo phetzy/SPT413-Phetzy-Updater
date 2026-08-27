@@ -8,6 +8,12 @@ namespace Phetzy.Spt413Updater.CrossPlatform;
 
 internal static class UpdaterSelfUpdate
 {
+    internal enum HandoffStrategy
+    {
+        HelperAfterExit,
+        AtomicReplaceAndParentAwareRestart
+    }
+
     private const string LatestReleaseApi =
         "https://api.github.com/repos/phetzy/SPT413-Phetzy-Updater/releases/latest";
 
@@ -107,18 +113,87 @@ internal static class UpdaterSelfUpdate
         var replacement = Path.Combine(extractRoot, replacementName);
         EnsureExecutable(replacement);
         progress.Report(new(92, "Starting verified updater replacement", null));
-        var start = new ProcessStartInfo
+        var strategy = SelectHandoffStrategy(OperatingSystem.IsLinux());
+        ProcessStartInfo start;
+        if (strategy == HandoffStrategy.AtomicReplaceAndParentAwareRestart)
         {
-            FileName = replacement,
-            UseShellExecute = false,
-            WorkingDirectory = extractRoot
-        };
-        start.ArgumentList.Add("--replace-updater");
-        start.ArgumentList.Add(originalUpdater);
-        start.ArgumentList.Add(Environment.ProcessId.ToString());
+            start = PrepareLinuxAtomicReplacement(originalUpdater, replacement, Environment.ProcessId);
+        }
+        else
+        {
+            start = new ProcessStartInfo
+            {
+                FileName = replacement,
+                UseShellExecute = false,
+                WorkingDirectory = extractRoot
+            };
+            start.ArgumentList.Add("--replace-updater");
+            start.ArgumentList.Add(originalUpdater);
+            start.ArgumentList.Add(Environment.ProcessId.ToString());
+        }
+
         if (Process.Start(start) is null)
             throw new InvalidOperationException("Could not start the verified updater replacement.");
         progress.Report(new(100, "Verified updater is ready to replace this version", release.TagName));
+    }
+
+    internal static HandoffStrategy SelectHandoffStrategy(bool isLinux) =>
+        isLinux
+            ? HandoffStrategy.AtomicReplaceAndParentAwareRestart
+            : HandoffStrategy.HelperAfterExit;
+
+    internal static ProcessStartInfo PrepareLinuxAtomicReplacement(
+        string targetPath,
+        string replacementPath,
+        int previousProcessId)
+    {
+        var target = Path.GetFullPath(targetPath);
+        var replacement = Path.GetFullPath(replacementPath);
+        if (!Path.GetFileName(target).Equals("SPT413-Phetzy-Updater.Linux", StringComparison.Ordinal))
+            throw new InvalidOperationException("Linux updater replacement target has an unexpected filename.");
+        if (!File.Exists(target))
+            throw new FileNotFoundException("Linux updater replacement target is missing.", target);
+        if (!File.Exists(replacement))
+            throw new FileNotFoundException("Linux updater replacement is missing.", replacement);
+
+        var staged = $"{target}.new-{Guid.NewGuid():N}";
+        try
+        {
+            File.Copy(replacement, staged, false);
+            EnsureExecutable(staged);
+            if (!HashFile(replacement).Equals(HashFile(staged), StringComparison.Ordinal))
+                throw new InvalidOperationException("The staged Linux updater failed SHA-256 verification.");
+            File.Move(staged, target, true);
+            if (!HashFile(replacement).Equals(HashFile(target), StringComparison.Ordinal))
+                throw new InvalidOperationException("The replaced Linux updater failed SHA-256 verification.");
+        }
+        finally
+        {
+            if (File.Exists(staged)) File.Delete(staged);
+        }
+
+        var restart = new ProcessStartInfo
+        {
+            FileName = target,
+            UseShellExecute = false,
+            WorkingDirectory = Path.GetDirectoryName(target)!
+        };
+        restart.ArgumentList.Add("--wait-for-parent");
+        restart.ArgumentList.Add(previousProcessId.ToString());
+        return restart;
+    }
+
+    internal static void WaitForParent(int previousProcessId)
+    {
+        try
+        {
+            using var previous = Process.GetProcessById(previousProcessId);
+            previous.WaitForExit();
+        }
+        catch (ArgumentException)
+        {
+            // The previous process already exited.
+        }
     }
 
     internal static int ReplaceRunningUpdater(string targetPath, int previousProcessId)
@@ -175,6 +250,9 @@ internal static class UpdaterSelfUpdate
             1024 * 1024, true);
         var buffer = new byte[1024 * 1024];
         long received = 0;
+        var started = Stopwatch.GetTimestamp();
+        var lastReport = started;
+        var lastPercent = -1;
         int read;
         while ((read = await input.ReadAsync(buffer, cancellationToken)) > 0)
         {
@@ -183,8 +261,18 @@ internal static class UpdaterSelfUpdate
             var percent = expectedBytes is > 0
                 ? startPercent + (int)((endPercent - startPercent) * received / expectedBytes.Value)
                 : startPercent;
-            progress.Report(new(Math.Clamp(percent, startPercent, endPercent), "Downloading updater update",
-                $"{received:N0} bytes"));
+            percent = Math.Clamp(percent, startPercent, endPercent);
+            var now = Stopwatch.GetTimestamp();
+            var reportDue = percent != lastPercent ||
+                            Stopwatch.GetElapsedTime(lastReport, now) >= TimeSpan.FromMilliseconds(250) ||
+                            expectedBytes == received;
+            if (reportDue)
+            {
+                progress.Report(new(percent, "Downloading updater update",
+                    ProgressPresentation.FormatTransferDetail(received, expectedBytes, Stopwatch.GetElapsedTime(started, now))));
+                lastPercent = percent;
+                lastReport = now;
+            }
         }
 
         if (expectedBytes is > 0 && received != expectedBytes.Value)

@@ -21,7 +21,7 @@ internal sealed class MainWindow : Window
         IsReadOnly = true,
         AcceptsReturn = true,
         TextWrapping = Avalonia.Media.TextWrapping.Wrap,
-        MinHeight = 160
+        MinHeight = 120
     };
 
     internal MainWindow()
@@ -32,6 +32,9 @@ internal sealed class MainWindow : Window
         MinWidth = 700;
         MinHeight = 460;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        ScrollViewer.SetVerticalScrollBarVisibility(
+            _log,
+            Avalonia.Controls.Primitives.ScrollBarVisibility.Auto);
 
         var title = new TextBlock
         {
@@ -57,15 +60,19 @@ internal sealed class MainWindow : Window
             Children = { _install, _hotfix, _checkUpdater }
         };
 
-        Content = new ScrollViewer
+        var layout = new Grid
         {
-            Content = new StackPanel
-            {
-                Margin = new Thickness(24),
-                Spacing = 14,
-                Children = { title, explanation, pathGrid, buttons, _progress, _phase, _detail, _log }
-            }
+            Margin = new Thickness(24),
+            RowDefinitions = new RowDefinitions("Auto,Auto,Auto,Auto,Auto,Auto,Auto,*"),
+            RowSpacing = 14
         };
+        Control[] rows = [title, explanation, pathGrid, buttons, _progress, _phase, _detail, _log];
+        for (var index = 0; index < rows.Length; index++)
+        {
+            Grid.SetRow(rows[index], index);
+            layout.Children.Add(rows[index]);
+        }
+        Content = layout;
 
         _browse.Click += BrowseClicked;
         _install.Click += InstallClicked;
@@ -155,13 +162,21 @@ internal sealed class MainWindow : Window
     {
         SetEnabled(false);
         _log.Text = "";
+        _progress.Value = 0;
+        _phase.Text = "Starting";
+        _detail.Text = "";
+        var logReducer = new ProgressLogReducer();
         var reporter = new Progress<PackInstallEngine.InstallProgress>(update =>
         {
             _progress.Value = update.Percent;
-            _phase.Text = update.Phase;
+            _phase.Text = $"{update.Percent}% — {update.Phase}";
             _detail.Text = update.Detail ?? "";
-            _log.Text += $"[{update.Percent,3}%] {update.Phase}{(update.Detail is null ? "" : $" — {update.Detail}")}\n";
-            _log.CaretIndex = _log.Text.Length;
+            var logLine = logReducer.Accept(update);
+            if (logLine is not null)
+            {
+                _log.Text += logLine + "\n";
+                _log.CaretIndex = _log.Text.Length;
+            }
         });
 
         try
