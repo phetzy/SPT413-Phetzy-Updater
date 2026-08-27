@@ -46,6 +46,16 @@ internal static class Program
                 return 0;
             }
 
+            if (args.Length == 1 && args[0] == "--self-update-child-smoke")
+                return 0;
+
+            if (args.Length == 1 && args[0] == "--check-self-update-handoff-runtime")
+            {
+                UpdaterSelfUpdate.ValidateProcessHandoffRuntime();
+                Console.WriteLine("SELF-UPDATE HANDOFF VALID");
+                return 0;
+            }
+
             if (args.Length == 1 && args[0] == "--check-private-channel")
             {
                 var engine = new PackInstallEngine();

@@ -173,6 +173,24 @@ internal static class UpdaterSelfUpdate
         }
     }
 
+    internal static void ValidateProcessHandoffRuntime()
+    {
+        var executable = Environment.ProcessPath
+                         ?? throw new InvalidOperationException("The running updater path is unavailable.");
+        var start = new ProcessStartInfo
+        {
+            FileName = executable,
+            UseShellExecute = false,
+            WorkingDirectory = AppContext.BaseDirectory
+        };
+        start.ArgumentList.Add("--self-update-child-smoke");
+        using var child = Process.Start(start)
+                          ?? throw new InvalidOperationException("Could not start the self-update handoff smoke child.");
+        child.WaitForExit();
+        if (child.ExitCode != 0)
+            throw new InvalidOperationException($"The self-update handoff smoke child exited {child.ExitCode}.");
+    }
+
     internal static ProcessStartInfo PrepareLinuxAtomicReplacement(
         string targetPath,
         string replacementPath,

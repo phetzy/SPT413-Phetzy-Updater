@@ -36,6 +36,7 @@ jobs:
           chmod +x publish/linux/SPT413-Phetzy-Updater.Linux
           publish/linux/SPT413-Phetzy-Updater.Linux --check-native-runtime
           publish/linux/SPT413-Phetzy-Updater.Linux --check-self-update-extraction
+          publish/linux/SPT413-Phetzy-Updater.Linux --check-self-update-handoff-runtime
 
   windows-runtime-smoke:
     runs-on: windows-latest
@@ -53,6 +54,7 @@ jobs:
         run: |
           ./publish/windows/SPT413-Phetzy-Updater.exe --check-native-runtime
           ./publish/windows/SPT413-Phetzy-Updater.exe --check-self-update-extraction
+          ./publish/windows/SPT413-Phetzy-Updater.exe --check-self-update-handoff-runtime
 
   release:
     needs: [build, windows-runtime-smoke]
