@@ -53,6 +53,27 @@ public sealed class ArchiveExtractionTests : IDisposable
     }
 
     [Fact]
+    public void RepairIgnoresBackslashArtifactsOutsideManagedRootsOnLinux()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+
+        var output = Path.Combine(_root, "repair-with-source-output");
+        Directory.CreateDirectory(output);
+        var misplacedMod = Path.Combine(output, @"BepInEx\plugins\example.dll");
+        var unrelatedSource = Path.Combine(output, @"SOURCE\Plugin.cs");
+        File.WriteAllText(misplacedMod, "recovered payload");
+        File.WriteAllText(unrelatedSource, "source payload");
+
+        var repaired = PackInstallEngine.RepairBackslashArtifacts(output);
+
+        Assert.Equal(1, repaired);
+        Assert.False(File.Exists(misplacedMod));
+        Assert.Equal("recovered payload",
+            File.ReadAllText(Path.Combine(output, "BepInEx", "plugins", "example.dll")));
+        Assert.Equal("source payload", File.ReadAllText(unrelatedSource));
+    }
+
+    [Fact]
     public void RejectsTraversalBeforeWritingAnyFiles()
     {
         var archivePath = CreateArchive(
