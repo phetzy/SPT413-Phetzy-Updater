@@ -3,7 +3,7 @@
 Native Windows and Linux GUI installer and hotfix utility for the private SPT 4.1.3 friends pack.
 
 > **Important:** Release 1.1.2 omitted Avalonia's native renderer libraries and can exit before opening its window.
-> Download 1.1.7 or newer manually. Earlier Linux builds had native-runtime, UI-thread, EFT-validation, automatic-relaunch, progress-display, or completed-download verification defects.
+> Download 1.1.8 or newer manually. Earlier Linux builds had native-runtime, UI-thread, EFT-validation, automatic-relaunch, progress-display, completed-download verification, or Windows-separator extraction defects.
 
 ## Download
 
@@ -38,6 +38,8 @@ Use **Apply Hotfix** to update Item Preview QoL in an existing compatible instal
 The updater validates the target version and existing-mod state. It downloads the AWS-hosted pack, reports progress, verifies SHA-256, installs the archives, audits the receipt, and deletes its downloaded bundle after success.
 
 Version 1.1.7 closes the download stream before SHA-256 verification. It also detects, verifies, and reuses a complete `.part` file left by version 1.1.6 instead of downloading the pack again.
+
+Version 1.1.8 normalizes Windows archive separators before writing files on Linux. Its **Repair Linux install** action repairs and audits a version 1.1.7 installation that already reached the final audit without downloading the pack again.
 
 ## Build
 

@@ -12,6 +12,11 @@ internal sealed class MainWindow : Window
     private readonly Button _browse = new() { Content = "Browse…" };
     private readonly Button _install = new() { Content = "Fresh install from private pack" };
     private readonly Button _hotfix = new() { Content = "Apply Hotfix" };
+    private readonly Button _repair = new()
+    {
+        Content = "Repair Linux install",
+        IsVisible = OperatingSystem.IsLinux()
+    };
     private readonly Button _checkUpdater = new() { Content = "Check for updater updates" };
     private readonly ProgressBar _progress = new() { Minimum = 0, Maximum = 100, Height = 22 };
     private readonly TextBlock _phase = new() { Text = "Select your SPT installation folder." };
@@ -57,7 +62,7 @@ internal sealed class MainWindow : Window
         {
             Orientation = Orientation.Horizontal,
             Spacing = 10,
-            Children = { _install, _hotfix, _checkUpdater }
+            Children = { _install, _hotfix, _repair, _checkUpdater }
         };
 
         var layout = new Grid
@@ -77,6 +82,7 @@ internal sealed class MainWindow : Window
         _browse.Click += BrowseClicked;
         _install.Click += InstallClicked;
         _hotfix.Click += HotfixClicked;
+        _repair.Click += RepairClicked;
         _checkUpdater.Click += CheckUpdaterClicked;
         Opened += async (_, _) => await CheckForUpdaterUpdateAsync(showCurrentMessage: false);
     }
@@ -108,6 +114,14 @@ internal sealed class MainWindow : Window
             () => _installPath.Text ?? "",
             (installPath, reporter) =>
                 Task.FromResult(_engine.ApplyHotfix(installPath, reporter))));
+    }
+
+    private async void RepairClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        await RunAsync(BindPathOperation(
+            () => _installPath.Text ?? "",
+            (installPath, reporter) =>
+                Task.FromResult(_engine.RepairLinuxInstall(installPath, reporter))));
     }
 
     internal static Func<IProgress<PackInstallEngine.InstallProgress>, Task<string>> BindPathOperation(
@@ -204,6 +218,7 @@ internal sealed class MainWindow : Window
         _browse.IsEnabled = enabled;
         _install.IsEnabled = enabled;
         _hotfix.IsEnabled = enabled;
+        _repair.IsEnabled = enabled;
         _checkUpdater.IsEnabled = enabled;
     }
 

@@ -260,6 +260,68 @@ internal sealed class PackInstallEngine
         return $"Item Preview QoL was updated. Backup: {backup}";
     }
 
+    internal string RepairLinuxInstall(string selectedPath, IProgress<InstallProgress> progress)
+    {
+        if (!OperatingSystem.IsLinux())
+            throw new InvalidOperationException("Linux archive-path repair is only available on Linux.");
+
+        var root = ValidateTarget(selectedPath, requireFresh: false);
+        progress.Report(new(10, "Locating misplaced Linux archive entries", null));
+        var repaired = RepairBackslashArtifacts(root);
+        if (repaired == 0)
+            throw new InvalidOperationException("No misplaced Windows-separator archive entries were found.");
+
+        progress.Report(new(80, "Auditing repaired installation", $"Repaired {repaired} paths"));
+        AuditInstall(root);
+        WriteReceipt(root);
+        progress.Report(new(100, "Linux installation repaired", $"Repaired {repaired} paths"));
+        return $"The Linux mod installation was repaired and audited. Repaired paths: {repaired}.";
+    }
+
+    internal static int RepairBackslashArtifacts(string root)
+    {
+        root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+        var rootWithSeparator = root + Path.DirectorySeparatorChar;
+        var plans = new List<(string Source, string Destination, bool IsDirectory)>();
+        var destinations = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var source in Directory.EnumerateFileSystemEntries(root, "*", SearchOption.TopDirectoryOnly))
+        {
+            var literalName = Path.GetFileName(source);
+            if (!literalName.Contains('\\')) continue;
+
+            var relative = NormalizeArchivePath(literalName).TrimEnd('/');
+            if (!relative.StartsWith("BepInEx/", StringComparison.OrdinalIgnoreCase) &&
+                !relative.StartsWith("SPT_Runtime/", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException($"Unexpected misplaced archive path: {literalName}");
+            var destination = Path.GetFullPath(Path.Combine(root,
+                relative.Replace('/', Path.DirectorySeparatorChar)));
+            if (!destination.StartsWith(rootWithSeparator, PathComparison()))
+                throw new InvalidOperationException($"Misplaced archive path escapes the SPT folder: {literalName}");
+            if (!destinations.Add(destination))
+                throw new InvalidOperationException($"Misplaced archive paths collide: {literalName}");
+
+            var isDirectory = Directory.Exists(source);
+            if (isDirectory && Directory.EnumerateFileSystemEntries(source).Any())
+                throw new InvalidOperationException($"Misplaced archive directory is not empty: {literalName}");
+            plans.Add((source, destination, isDirectory));
+        }
+
+        foreach (var plan in plans)
+        {
+            if (plan.IsDirectory)
+            {
+                Directory.CreateDirectory(plan.Destination);
+                Directory.Delete(plan.Source);
+                continue;
+            }
+
+            Directory.CreateDirectory(Path.GetDirectoryName(plan.Destination)!);
+            File.Move(plan.Source, plan.Destination, true);
+        }
+
+        return plans.Count;
+    }
+
     internal static string ValidateTarget(string selectedPath, bool requireFresh)
     {
         if (string.IsNullOrWhiteSpace(selectedPath) || !Directory.Exists(selectedPath))

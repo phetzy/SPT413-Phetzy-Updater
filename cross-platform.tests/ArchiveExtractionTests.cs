@@ -35,6 +35,24 @@ public sealed class ArchiveExtractionTests : IDisposable
     }
 
     [Fact]
+    public void RepairsLiteralWindowsSeparatorArtifactsOnLinux()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+
+        var output = Path.Combine(_root, "repair-output");
+        Directory.CreateDirectory(output);
+        var misplaced = Path.Combine(output, @"BepInEx\plugins\example.dll");
+        File.WriteAllText(misplaced, "recovered payload");
+
+        var repaired = PackInstallEngine.RepairBackslashArtifacts(output);
+
+        Assert.Equal(1, repaired);
+        Assert.False(File.Exists(misplaced));
+        Assert.Equal("recovered payload",
+            File.ReadAllText(Path.Combine(output, "BepInEx", "plugins", "example.dll")));
+    }
+
+    [Fact]
     public void RejectsTraversalBeforeWritingAnyFiles()
     {
         var archivePath = CreateArchive(
