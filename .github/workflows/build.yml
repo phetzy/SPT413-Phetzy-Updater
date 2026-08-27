@@ -54,11 +54,27 @@ jobs:
           -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
           -o publish/windows
       - name: Smoke-test Windows native runtime
+        shell: pwsh
         run: |
-          ./publish/windows/SPT413-Phetzy-Updater.exe --check-native-runtime
-          ./publish/windows/SPT413-Phetzy-Updater.exe --check-managed-verification-runtime
-          ./publish/windows/SPT413-Phetzy-Updater.exe --check-self-update-extraction
-          ./publish/windows/SPT413-Phetzy-Updater.exe --check-self-update-handoff-runtime
+          $exe = (Resolve-Path 'publish/windows/SPT413-Phetzy-Updater.exe').Path
+          $workingDirectory = Split-Path -Parent $exe
+          function Invoke-UpdaterCheck([string]$argument) {
+            $process = Start-Process -FilePath $exe -ArgumentList $argument -WorkingDirectory $workingDirectory -Wait -PassThru -WindowStyle Hidden
+            try {
+              if ($process.ExitCode -ne 0) {
+                $errorLog = Join-Path $workingDirectory 'updater-error.log'
+                if (Test-Path -LiteralPath $errorLog) { Get-Content -Raw -LiteralPath $errorLog }
+                throw "Windows updater check failed: $argument; exit code $($process.ExitCode)."
+              }
+            }
+            finally {
+              $process.Dispose()
+            }
+          }
+          Invoke-UpdaterCheck '--check-native-runtime'
+          Invoke-UpdaterCheck '--check-managed-verification-runtime'
+          Invoke-UpdaterCheck '--check-self-update-extraction'
+          Invoke-UpdaterCheck '--check-self-update-handoff-runtime'
       - name: Smoke-test packaged Windows executable and GUI startup
         shell: pwsh
         run: |
@@ -76,14 +92,24 @@ jobs:
           if ($actualVersion -ne $expectedVersion) {
             throw "Packaged Windows file version mismatch: $actualVersion != $expectedVersion"
           }
-          & $exe --check-native-runtime
-          if ($LASTEXITCODE -ne 0) { throw 'Packaged Windows native-runtime check failed.' }
-          & $exe --check-managed-verification-runtime
-          if ($LASTEXITCODE -ne 0) { throw 'Packaged Windows verification-runtime check failed.' }
-          & $exe --check-self-update-extraction
-          if ($LASTEXITCODE -ne 0) { throw 'Packaged Windows self-update extraction check failed.' }
-          & $exe --check-self-update-handoff-runtime
-          if ($LASTEXITCODE -ne 0) { throw 'Packaged Windows self-update handoff check failed.' }
+          $workingDirectory = Split-Path -Parent $exe
+          function Invoke-PackagedUpdaterCheck([string]$argument) {
+            $check = Start-Process -FilePath $exe -ArgumentList $argument -WorkingDirectory $workingDirectory -Wait -PassThru -WindowStyle Hidden
+            try {
+              if ($check.ExitCode -ne 0) {
+                $errorLog = Join-Path $workingDirectory 'updater-error.log'
+                if (Test-Path -LiteralPath $errorLog) { Get-Content -Raw -LiteralPath $errorLog }
+                throw "Packaged Windows updater check failed: $argument; exit code $($check.ExitCode)."
+              }
+            }
+            finally {
+              $check.Dispose()
+            }
+          }
+          Invoke-PackagedUpdaterCheck '--check-native-runtime'
+          Invoke-PackagedUpdaterCheck '--check-managed-verification-runtime'
+          Invoke-PackagedUpdaterCheck '--check-self-update-extraction'
+          Invoke-PackagedUpdaterCheck '--check-self-update-handoff-runtime'
           $process = Start-Process -FilePath $exe -PassThru -WindowStyle Hidden
           try {
             Start-Sleep -Seconds 5
