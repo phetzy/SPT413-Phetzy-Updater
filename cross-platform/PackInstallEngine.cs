@@ -482,6 +482,7 @@ internal sealed class PackInstallEngine
     {
         using var archive = ArchiveFactory.OpenArchive(archivePath);
         var destinations = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var planned = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var rootWithSeparator = root + Path.DirectorySeparatorChar;
         foreach (var entry in archive.Entries)
         {
@@ -494,15 +495,28 @@ internal sealed class PackInstallEngine
                 throw new InvalidOperationException($"Mod archive contains a case-colliding path: {entry.Key}");
             if (IsSymbolicLink(entry))
                 throw new InvalidOperationException($"Mod archive contains a symbolic link: {entry.Key}");
+            planned.Add(key, destination);
         }
 
-        archive.WriteToDirectory(root, new ExtractionOptions
+        var options = new ExtractionOptions
         {
-            ExtractFullPath = true,
             Overwrite = true,
             CheckCrc = true,
             SymbolicLinkHandler = (_, _) => throw new InvalidOperationException("Symbolic links are not allowed.")
-        });
+        };
+        foreach (var entry in archive.Entries)
+        {
+            var key = NormalizeArchivePath(entry.Key ?? "");
+            if (!planned.TryGetValue(key, out var destination)) continue;
+            if (entry.IsDirectory)
+            {
+                Directory.CreateDirectory(destination);
+                continue;
+            }
+
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            entry.WriteToFile(destination, options);
+        }
     }
 
     private static void CopyBundledSettings(Dictionary<string, ZipArchiveEntry> entries, string root)
