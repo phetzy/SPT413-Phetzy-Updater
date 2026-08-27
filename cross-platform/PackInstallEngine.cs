@@ -13,6 +13,8 @@ internal sealed class PackInstallEngine
 {
     internal const string ExpectedEftVersion = "0.16.9.40743";
     internal const string ExpectedSptVersion = "4.1.3";
+    internal const string ExpectedEftSha256 =
+        "679486C18B89092F9C692FEA34AB4841923F768418C5E8302FD93B14DB4A41E5";
     internal const int ExpectedArchiveCount = 60;
     internal const string SourceResource = "Phetzy.Spt413Updater.PrivatePack.updater-source.json";
     internal const string HotfixResource = "Phetzy.Spt413Updater.Payload.JBOBYH_ItemPreviewQoL.dll";
@@ -279,14 +281,31 @@ internal sealed class PackInstallEngine
 
         var eftVersion = FileVersionInfo.GetVersionInfo(eft).FileVersion;
         var serverVersion = FileVersionInfo.GetVersionInfo(serverAssembly).FileVersion;
-        if (eftVersion != ExpectedEftVersion || serverVersion != ExpectedSptVersion)
-            throw new InvalidOperationException(
-                $"Wrong build. Required SPT {ExpectedSptVersion} / EFT {ExpectedEftVersion}; " +
-                $"found SPT {serverVersion ?? "unknown"} / EFT {eftVersion ?? "unknown"}.");
+        var eftSha256 = string.IsNullOrWhiteSpace(eftVersion)
+            ? Sha256File(eft)
+            : null;
+        ValidateBuildVersions(eftVersion, serverVersion, eftSha256);
 
         AssertNoRunningProcesses(root);
         if (requireFresh) AssertFresh(root);
         return root;
+    }
+
+    internal static void ValidateBuildVersions(string? eftVersion, string? serverVersion, string? eftSha256 = null)
+    {
+        var exactEftVersion = string.Equals(eftVersion, ExpectedEftVersion, StringComparison.Ordinal);
+        var exactEftHashWhenVersionUnavailable = string.IsNullOrWhiteSpace(eftVersion) &&
+            string.Equals(eftSha256, ExpectedEftSha256, StringComparison.OrdinalIgnoreCase);
+        if ((!exactEftVersion && !exactEftHashWhenVersionUnavailable) ||
+            !string.Equals(serverVersion, ExpectedSptVersion, StringComparison.Ordinal))
+        {
+            var eftDescription = string.IsNullOrWhiteSpace(eftVersion)
+                ? $"unknown (SHA-256 {eftSha256 ?? "unavailable"})"
+                : eftVersion;
+            throw new InvalidOperationException(
+                $"Wrong build. Required SPT {ExpectedSptVersion} / EFT {ExpectedEftVersion}; " +
+                $"found SPT {serverVersion ?? "unknown"} / EFT {eftDescription}.");
+        }
     }
 
     private static void AssertFresh(string root)
@@ -564,6 +583,12 @@ internal sealed class PackInstallEngine
             1024 * 1024, true);
         var hash = await SHA256.HashDataAsync(stream, cancellationToken);
         return Convert.ToHexString(hash);
+    }
+
+    private static string Sha256File(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        return Convert.ToHexString(SHA256.HashData(stream));
     }
 
     private static string CombineRoot(string root, string relative) =>
