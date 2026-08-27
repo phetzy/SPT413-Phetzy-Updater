@@ -105,7 +105,12 @@ internal sealed class PackInstallEngine
         "SPT_Runtime/user/mods/WTT-ContentBackport/WTT-ContentBackport.dll"
     ];
 
-    private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromHours(8) };
+    private readonly HttpClient _httpClient;
+
+    internal PackInstallEngine(HttpClient? httpClient = null)
+    {
+        _httpClient = httpClient ?? new HttpClient { Timeout = TimeSpan.FromHours(8) };
+    }
 
     internal static void ValidateEmbeddedSource()
     {
@@ -356,46 +361,52 @@ internal sealed class PackInstallEngine
         }
     }
 
-    private async Task DownloadBundleAsync(BundleEntry bundle, string outputPath, IProgress<InstallProgress> progress,
+    internal async Task DownloadBundleAsync(BundleEntry bundle, string outputPath,
+        IProgress<InstallProgress> progress,
         CancellationToken cancellationToken)
     {
         if (!Uri.TryCreate(bundle.Url, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps)
             throw new InvalidOperationException("The bundle URL is not valid HTTPS.");
+        if (await TryPromoteCompletedPartAsync(bundle, outputPath, progress, cancellationToken))
+            return;
+
         var tempPath = $"{outputPath}.{Guid.NewGuid():N}.part";
         TryDelete(tempPath);
+        long written = 0;
         try
         {
-            using var response = await _httpClient.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead,
-                cancellationToken);
-            response.EnsureSuccessStatusCode();
-            await using var input = await response.Content.ReadAsStreamAsync(cancellationToken);
-            await using var output = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None,
-                1024 * 1024, true);
-            var buffer = new byte[1024 * 1024];
-            long written = 0;
-            var started = Stopwatch.GetTimestamp();
-            var lastReport = started;
-            var lastTransferPercent = -1;
-            int read;
-            while ((read = await input.ReadAsync(buffer, cancellationToken)) > 0)
             {
-                await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
-                written += read;
-                var percent = bundle.Bytes == 0 ? 0 : (int)Math.Min(100, written * 100 / bundle.Bytes);
-                var now = Stopwatch.GetTimestamp();
-                var reportDue = percent != lastTransferPercent ||
-                                Stopwatch.GetElapsedTime(lastReport, now) >= TimeSpan.FromMilliseconds(250) ||
-                                written == bundle.Bytes;
-                if (reportDue)
+                using var response = await _httpClient.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead,
+                    cancellationToken);
+                response.EnsureSuccessStatusCode();
+                await using var input = await response.Content.ReadAsStreamAsync(cancellationToken);
+                await using var output = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None,
+                    1024 * 1024, true);
+                var buffer = new byte[1024 * 1024];
+                var started = Stopwatch.GetTimestamp();
+                var lastReport = started;
+                var lastTransferPercent = -1;
+                int read;
+                while ((read = await input.ReadAsync(buffer, cancellationToken)) > 0)
                 {
-                    progress.Report(new(4 + percent * 20 / 100, "Downloading mod pack",
-                        $"{percent}% — {ProgressPresentation.FormatTransferDetail(written, bundle.Bytes, Stopwatch.GetElapsedTime(started, now))}"));
-                    lastTransferPercent = percent;
-                    lastReport = now;
+                    await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+                    written += read;
+                    var percent = bundle.Bytes == 0 ? 0 : (int)Math.Min(100, written * 100 / bundle.Bytes);
+                    var now = Stopwatch.GetTimestamp();
+                    var reportDue = percent != lastTransferPercent ||
+                                    Stopwatch.GetElapsedTime(lastReport, now) >= TimeSpan.FromMilliseconds(250) ||
+                                    written == bundle.Bytes;
+                    if (reportDue)
+                    {
+                        progress.Report(new(4 + percent * 20 / 100, "Downloading mod pack",
+                            $"{percent}% — {ProgressPresentation.FormatTransferDetail(written, bundle.Bytes, Stopwatch.GetElapsedTime(started, now))}"));
+                        lastTransferPercent = percent;
+                        lastReport = now;
+                    }
                 }
-            }
 
-            await output.FlushAsync(cancellationToken);
+                await output.FlushAsync(cancellationToken);
+            }
             if (written != bundle.Bytes)
                 throw new InvalidOperationException($"Downloaded size mismatch: {written} != {bundle.Bytes}");
             var hash = await Sha256FileAsync(tempPath, cancellationToken);
@@ -407,6 +418,37 @@ internal sealed class PackInstallEngine
         {
             TryDelete(tempPath);
         }
+    }
+
+    private static async Task<bool> TryPromoteCompletedPartAsync(BundleEntry bundle, string outputPath,
+        IProgress<InstallProgress> progress, CancellationToken cancellationToken)
+    {
+        var directory = Path.GetDirectoryName(outputPath);
+        if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory)) return false;
+
+        var pattern = $"{Path.GetFileName(outputPath)}.*.part";
+        foreach (var candidate in Directory.EnumerateFiles(directory, pattern))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (new FileInfo(candidate).Length != bundle.Bytes)
+            {
+                TryDelete(candidate);
+                continue;
+            }
+
+            progress.Report(new(24, "Verifying completed cached download", Path.GetFileName(candidate)));
+            var hash = await Sha256FileAsync(candidate, cancellationToken);
+            if (!hash.Equals(bundle.Sha256, StringComparison.OrdinalIgnoreCase))
+            {
+                TryDelete(candidate);
+                continue;
+            }
+
+            File.Move(candidate, outputPath, true);
+            return true;
+        }
+
+        return false;
     }
 
     private static void ValidateManifest(PackManifest manifest)
@@ -652,5 +694,5 @@ internal sealed class PackInstallEngine
     }
     private sealed record UpdaterSource(string ManifestUrl);
     private sealed record PackManifest(int SchemaVersion, string SptVersion, string EftVersion, BundleEntry Bundle);
-    private sealed record BundleEntry(string FileName, string Url, long Bytes, string Sha256);
+    internal sealed record BundleEntry(string FileName, string Url, long Bytes, string Sha256);
 }
