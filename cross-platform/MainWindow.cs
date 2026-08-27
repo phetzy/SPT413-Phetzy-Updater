@@ -89,12 +89,26 @@ internal sealed class MainWindow : Window
 
     private async void InstallClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        await RunAsync(async reporter => await _engine.InstallFromChannelAsync(_installPath.Text ?? "", reporter));
+        await RunAsync(BindPathOperation(
+            () => _installPath.Text ?? "",
+            async (installPath, reporter) =>
+                await _engine.InstallFromChannelAsync(installPath, reporter)));
     }
 
     private async void HotfixClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        await RunAsync(reporter => Task.FromResult(_engine.ApplyHotfix(_installPath.Text ?? "", reporter)));
+        await RunAsync(BindPathOperation(
+            () => _installPath.Text ?? "",
+            (installPath, reporter) =>
+                Task.FromResult(_engine.ApplyHotfix(installPath, reporter))));
+    }
+
+    internal static Func<IProgress<PackInstallEngine.InstallProgress>, Task<string>> BindPathOperation(
+        Func<string> readPath,
+        Func<string, IProgress<PackInstallEngine.InstallProgress>, Task<string>> operation)
+    {
+        var installPath = readPath();
+        return reporter => operation(installPath, reporter);
     }
 
     private async void CheckUpdaterClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e) =>
