@@ -35,6 +35,7 @@ jobs:
         run: |
           chmod +x publish/linux/SPT413-Phetzy-Updater.Linux
           publish/linux/SPT413-Phetzy-Updater.Linux --check-native-runtime
+          publish/linux/SPT413-Phetzy-Updater.Linux --check-managed-verification-runtime
           publish/linux/SPT413-Phetzy-Updater.Linux --check-self-update-extraction
           publish/linux/SPT413-Phetzy-Updater.Linux --check-self-update-handoff-runtime
 
@@ -45,6 +46,8 @@ jobs:
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
+      - name: Run complete test suite on Windows
+        run: dotnet test cross-platform.tests/SPT413-Phetzy-Updater.CrossPlatform.Tests.csproj -c Release
       - name: Publish Windows x64
         run: >-
           dotnet publish cross-platform/SPT413-Phetzy-Updater.CrossPlatform.csproj
@@ -53,8 +56,45 @@ jobs:
       - name: Smoke-test Windows native runtime
         run: |
           ./publish/windows/SPT413-Phetzy-Updater.exe --check-native-runtime
+          ./publish/windows/SPT413-Phetzy-Updater.exe --check-managed-verification-runtime
           ./publish/windows/SPT413-Phetzy-Updater.exe --check-self-update-extraction
           ./publish/windows/SPT413-Phetzy-Updater.exe --check-self-update-handoff-runtime
+      - name: Smoke-test packaged Windows executable and GUI startup
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'updater-windows-smoke.zip'
+          $expanded = Join-Path $env:RUNNER_TEMP 'updater-windows-smoke'
+          Compress-Archive -Path 'publish/windows/*' -DestinationPath $archive
+          Expand-Archive -LiteralPath $archive -DestinationPath $expanded
+          $exe = Join-Path $expanded 'SPT413-Phetzy-Updater.exe'
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
+            throw 'Packaged Windows updater executable is missing.'
+          }
+          [xml]$project = Get-Content -Raw 'cross-platform/SPT413-Phetzy-Updater.CrossPlatform.csproj'
+          $expectedVersion = [string]$project.Project.PropertyGroup.FileVersion
+          $actualVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($exe).FileVersion
+          if ($actualVersion -ne $expectedVersion) {
+            throw "Packaged Windows file version mismatch: $actualVersion != $expectedVersion"
+          }
+          & $exe --check-native-runtime
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged Windows native-runtime check failed.' }
+          & $exe --check-managed-verification-runtime
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged Windows verification-runtime check failed.' }
+          & $exe --check-self-update-extraction
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged Windows self-update extraction check failed.' }
+          & $exe --check-self-update-handoff-runtime
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged Windows self-update handoff check failed.' }
+          $process = Start-Process -FilePath $exe -PassThru -WindowStyle Hidden
+          try {
+            Start-Sleep -Seconds 5
+            if ($process.HasExited) {
+              throw "Packaged Windows GUI exited during startup with code $($process.ExitCode)."
+            }
+          }
+          finally {
+            if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
+            $process.Dispose()
+          }
 
   release:
     needs: [build, windows-runtime-smoke]

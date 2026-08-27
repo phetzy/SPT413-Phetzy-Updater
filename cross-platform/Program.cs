@@ -56,6 +56,13 @@ internal static class Program
                 return 0;
             }
 
+            if (args.Length == 1 && args[0] == "--check-managed-verification-runtime")
+            {
+                PackInstallEngine.ValidateManagedVerificationRuntime();
+                Console.WriteLine("MANAGED VERIFICATION RUNTIME VALID");
+                return 0;
+            }
+
             if (args.Length == 1 && args[0] == "--check-private-channel")
             {
                 var engine = new PackInstallEngine();

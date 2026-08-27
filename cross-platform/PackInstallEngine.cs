@@ -499,6 +499,48 @@ internal sealed class PackInstallEngine
         return new ArchiveRepairResult(missing, replaced, preserved, unchanged);
     }
 
+    internal static void ValidateManagedVerificationRuntime()
+    {
+        var fixture = Path.Combine(Path.GetTempPath(), $"phetzy-verification-smoke-{Guid.NewGuid():N}");
+        var root = Path.Combine(fixture, "SPT");
+        var archivePath = Path.Combine(fixture, "fixture.zip");
+        Directory.CreateDirectory(Path.Combine(root, "BepInEx", "plugins"));
+        Directory.CreateDirectory(Path.Combine(root, "BepInEx", "config"));
+        try
+        {
+            using (var stream = File.Create(archivePath))
+            using (var archive = new ZipArchive(stream, ZipArchiveMode.Create))
+            {
+                WriteFixtureEntry(archive, @"BepInEx\plugins\broken.dll", "expected payload");
+                WriteFixtureEntry(archive, @"SPT_Runtime\user\mods\fixture\missing.dll", "restored payload");
+                WriteFixtureEntry(archive, @"BepInEx\config\fixture.cfg", "pack default");
+                WriteFixtureEntry(archive, @"SOURCE\Plugin.cs", "ignored source");
+            }
+
+            File.WriteAllText(Path.Combine(root, "BepInEx", "plugins", "broken.dll"), "corrupt payload");
+            File.WriteAllText(Path.Combine(root, "BepInEx", "config", "fixture.cfg"), "user setting");
+            var result = RepairManagedFilesFromArchive(archivePath, root);
+            if (result.Missing != 1 || result.Replaced != 1 || result.Preserved != 1 ||
+                File.ReadAllText(Path.Combine(root, "BepInEx", "plugins", "broken.dll")) != "expected payload" ||
+                File.ReadAllText(Path.Combine(root, "SPT_Runtime", "user", "mods", "fixture", "missing.dll")) !=
+                "restored payload" ||
+                File.ReadAllText(Path.Combine(root, "BepInEx", "config", "fixture.cfg")) != "user setting" ||
+                File.Exists(Path.Combine(root, "SOURCE", "Plugin.cs")))
+                throw new InvalidOperationException("Managed verification runtime smoke check failed.");
+        }
+        finally
+        {
+            if (Directory.Exists(fixture)) Directory.Delete(fixture, true);
+        }
+    }
+
+    private static void WriteFixtureEntry(ZipArchive archive, string path, string contents)
+    {
+        var entry = archive.CreateEntry(path);
+        using var writer = new StreamWriter(entry.Open());
+        writer.Write(contents);
+    }
+
     internal static string ValidateTarget(string selectedPath, bool requireFresh)
     {
         if (string.IsNullOrWhiteSpace(selectedPath) || !Directory.Exists(selectedPath))

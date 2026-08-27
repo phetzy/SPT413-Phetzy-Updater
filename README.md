@@ -24,6 +24,8 @@ The official release embeds access to the private pack. No separate configuratio
 Release builds run native-runtime smoke checks on Windows and Linux. They also verify that the embedded private
 channel can read its manifest and the S3-backed bundle endpoint before GitHub publishes the assets.
 
+The Windows release gate runs the complete unit suite on Windows, publishes the self-contained executable, checks its file version, extracts it from a ZIP, exercises native rendering, managed mod verification, self-update extraction, and self-update process handoff, then confirms the packaged GUI remains running after startup.
+
 The updater checks the latest GitHub release when it opens. It selects the Windows or Linux asset automatically, then can download, verify, replace, and restart itself. A commit alone does not trigger client updates; publish a newer versioned release.
 
 Use **Apply Hotfix** to update Item Preview QoL in an existing compatible installation.
