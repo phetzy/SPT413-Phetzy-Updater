@@ -70,6 +70,36 @@ public sealed class BundleDownloadTests
         }
     }
 
+    [Fact]
+    public async Task DownloadBundle_ReusesVerifiedCachedBundleWithoutDownloadingAgain()
+    {
+        var payload = Enumerable.Range(0, 1024 * 1024 + 47)
+            .Select(index => (byte)(index % 233))
+            .ToArray();
+        using var client = new HttpClient(new FailIfRequestedHandler());
+        var engine = new PackInstallEngine(client);
+        var root = Path.Combine(Path.GetTempPath(), $"phetzy-download-cache-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        var outputPath = Path.Combine(root, "bundle.zip");
+        await File.WriteAllBytesAsync(outputPath, payload);
+        var bundle = new PackInstallEngine.BundleEntry(
+            "bundle.zip",
+            "https://example.test/bundle.zip",
+            payload.LongLength,
+            Convert.ToHexString(SHA256.HashData(payload)));
+
+        try
+        {
+            await engine.DownloadBundleAsync(bundle, outputPath, new SinkProgress(), CancellationToken.None);
+
+            Assert.Equal(payload, await File.ReadAllBytesAsync(outputPath));
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
     private sealed class StaticContentHandler(byte[] payload) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,

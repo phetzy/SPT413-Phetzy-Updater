@@ -181,6 +181,32 @@ internal sealed class PackInstallEngine
         }
     }
 
+    internal async Task<string> VerifyAndRepairFromChannelAsync(string selectedPath,
+        IProgress<InstallProgress> progress, CancellationToken cancellationToken = default)
+    {
+        var root = ValidateTarget(selectedPath, requireFresh: false);
+        var source = LoadSource(required: true);
+        if (!Uri.TryCreate(source.ManifestUrl, UriKind.Absolute, out var manifestUri) ||
+            manifestUri.Scheme != Uri.UriSchemeHttps)
+            throw new InvalidOperationException("The embedded manifest URL is not valid HTTPS.");
+
+        progress.Report(new(3, "Downloading signed manifest", manifestUri.Host));
+        var manifestJson = await _httpClient.GetStringAsync(manifestUri, cancellationToken);
+        var manifest = JsonSerializer.Deserialize<PackManifest>(manifestJson, JsonOptions)
+                       ?? throw new InvalidOperationException("The pack manifest is invalid.");
+        ValidateManifest(manifest);
+
+        var cacheRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "PhetzySptUpdater", "cache");
+        Directory.CreateDirectory(cacheRoot);
+        var bundlePath = Path.Combine(cacheRoot, Path.GetFileName(manifest.Bundle.FileName));
+        await DownloadBundleAsync(manifest.Bundle, bundlePath, progress, cancellationToken);
+
+        var verifyProgress = new InlineProgress<InstallProgress>(update =>
+            progress.Report(MapDownloadedBundleProgress(update)));
+        return await VerifyAndRepairFromBundleAsync(root, bundlePath, verifyProgress, cancellationToken);
+    }
+
     internal async Task<string> InstallFromBundleAsync(string selectedPath, string bundlePath,
         IProgress<InstallProgress> progress, CancellationToken cancellationToken = default)
     {
@@ -237,6 +263,66 @@ internal sealed class PackInstallEngine
         }
     }
 
+    internal async Task<string> VerifyAndRepairFromBundleAsync(string selectedPath, string bundlePath,
+        IProgress<InstallProgress> progress, CancellationToken cancellationToken = default)
+    {
+        var root = ValidateTarget(selectedPath, requireFresh: false);
+        if (!File.Exists(bundlePath)) throw new FileNotFoundException("The mod-pack bundle is missing.", bundlePath);
+
+        progress.Report(new(5, "Opening verified mod-pack bundle", Path.GetFileName(bundlePath)));
+        using var outer = ZipFile.OpenRead(bundlePath);
+        var entries = outer.Entries
+            .Where(entry => !string.IsNullOrEmpty(entry.Name))
+            .ToDictionary(entry => NormalizeArchivePath(entry.FullName), StringComparer.OrdinalIgnoreCase);
+        var order = ReadLines(entries, "INSTALL_ORDER.txt");
+        var expected = ReadHashManifest(entries, "ARCHIVES_SHA256SUMS.txt");
+        ValidateBundleIndex(order, expected, entries);
+
+        for (var index = 0; index < order.Count; index++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var relative = NormalizeArchivePath(order[index]);
+            var actual = await HashEntryAsync(entries[relative], cancellationToken);
+            if (!actual.Equals(expected[relative], StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException($"Archive checksum mismatch: {relative}");
+            progress.Report(new(5 + (index + 1) * 25 / order.Count,
+                "Verifying bundled archives", $"{index + 1} / {order.Count} â€” {relative}"));
+        }
+
+        var scratch = Path.Combine(Path.GetTempPath(), $"phetzy-spt-verify-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(scratch);
+        var total = new ArchiveRepairResult(0, 0, 0, 0);
+        try
+        {
+            for (var index = 0; index < order.Count; index++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var relative = NormalizeArchivePath(order[index]);
+                var tempArchive = Path.Combine(scratch, $"{index:D2}-{Path.GetFileName(relative)}");
+                await CopyEntryAsync(entries[relative], tempArchive, cancellationToken);
+                var result = RepairManagedFilesFromArchive(tempArchive, root);
+                total += result;
+                TryDelete(tempArchive);
+                progress.Report(new(30 + (index + 1) * 60 / order.Count,
+                    "Verifying installed mod files",
+                    $"{index + 1} / {order.Count} â€” restored {total.Missing}, replaced {total.Replaced}, preserved {total.Preserved}"));
+            }
+
+            CopyBundledSettings(entries, root);
+            progress.Report(new(94, "Auditing verified installation", null));
+            AuditInstall(root);
+            WriteReceipt(root);
+            progress.Report(new(100, "Mod-pack verification complete",
+                $"Restored {total.Missing}; replaced {total.Replaced}; preserved {total.Preserved} configurations"));
+            return $"Mod-pack verification completed. Missing files restored: {total.Missing}. " +
+                   $"Corrupt files replaced: {total.Replaced}. Existing configurations preserved: {total.Preserved}.";
+        }
+        finally
+        {
+            if (Directory.Exists(scratch)) Directory.Delete(scratch, true);
+        }
+    }
+
     internal string ApplyHotfix(string selectedPath, IProgress<InstallProgress> progress)
     {
         var root = ValidateTarget(selectedPath, requireFresh: false);
@@ -269,7 +355,23 @@ internal sealed class PackInstallEngine
         progress.Report(new(10, "Locating misplaced Linux archive entries", null));
         var repaired = RepairBackslashArtifacts(root);
         if (repaired == 0)
-            throw new InvalidOperationException("No misplaced Windows-separator archive entries were found.");
+        {
+            progress.Report(new(80, "No misplaced Linux paths found", "Auditing the existing installation"));
+            try
+            {
+                AuditInstall(root);
+                WriteReceipt(root);
+            }
+            catch (InvalidOperationException ex)
+            {
+                throw new InvalidOperationException(
+                    "No Linux archive-path repair is needed, but the mod-pack audit found a problem. " +
+                    "Use Verify Mod Pack Install to replace missing or corrupt files.", ex);
+            }
+
+            progress.Report(new(100, "No Linux repair needed", "The installed mod-pack audit passed"));
+            return "No Linux archive-path repair was needed. The installed mod-pack audit passed.";
+        }
 
         progress.Report(new(80, "Auditing repaired installation", $"Repaired {repaired} paths"));
         AuditInstall(root);
@@ -292,7 +394,7 @@ internal sealed class PackInstallEngine
             var relative = NormalizeArchivePath(literalName).TrimEnd('/');
             if (!relative.StartsWith("BepInEx/", StringComparison.OrdinalIgnoreCase) &&
                 !relative.StartsWith("SPT_Runtime/", StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException($"Unexpected misplaced archive path: {literalName}");
+                continue;
             var destination = Path.GetFullPath(Path.Combine(root,
                 relative.Replace('/', Path.DirectorySeparatorChar)));
             if (!destination.StartsWith(rootWithSeparator, PathComparison()))
@@ -320,6 +422,81 @@ internal sealed class PackInstallEngine
         }
 
         return plans.Count;
+    }
+
+    internal static ArchiveRepairResult RepairManagedFilesFromArchive(string archivePath, string root)
+    {
+        root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+        var rootWithSeparator = root + Path.DirectorySeparatorChar;
+        using var archive = ArchiveFactory.OpenArchive(archivePath);
+        var destinations = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var planned = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in archive.Entries)
+        {
+            var key = NormalizeArchivePath(entry.Key ?? "");
+            if (string.IsNullOrWhiteSpace(key)) continue;
+            var destination = Path.GetFullPath(Path.Combine(root, key.Replace('/', Path.DirectorySeparatorChar)));
+            if (!destination.StartsWith(rootWithSeparator, PathComparison()))
+                throw new InvalidOperationException($"Mod archive entry escapes the SPT folder: {entry.Key}");
+            if (!destinations.Add(destination))
+                throw new InvalidOperationException($"Mod archive contains a case-colliding path: {entry.Key}");
+            if (IsSymbolicLink(entry))
+                throw new InvalidOperationException($"Mod archive contains a symbolic link: {entry.Key}");
+            if (IsManagedRuntimePath(key)) planned.Add(key, destination);
+        }
+
+        var options = new ExtractionOptions
+        {
+            Overwrite = true,
+            CheckCrc = true,
+            SymbolicLinkHandler = (_, _) => throw new InvalidOperationException("Symbolic links are not allowed.")
+        };
+        var missing = 0;
+        var replaced = 0;
+        var preserved = 0;
+        var unchanged = 0;
+        foreach (var entry in archive.Entries)
+        {
+            var key = NormalizeArchivePath(entry.Key ?? "");
+            if (!planned.TryGetValue(key, out var destination) || entry.IsDirectory) continue;
+
+            if (File.Exists(destination) && IsUserMutableConfiguration(key))
+            {
+                preserved++;
+                continue;
+            }
+
+            var exists = File.Exists(destination);
+            if (exists)
+            {
+                using var expectedStream = entry.OpenEntryStream();
+                var expectedHash = SHA256.HashData(expectedStream);
+                using var actualStream = new FileStream(destination, FileMode.Open, FileAccess.Read, FileShare.Read);
+                var actualHash = SHA256.HashData(actualStream);
+                if (expectedHash.AsSpan().SequenceEqual(actualHash))
+                {
+                    unchanged++;
+                    continue;
+                }
+            }
+
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            var temp = $"{destination}.phetzy-repair-{Guid.NewGuid():N}.tmp";
+            try
+            {
+                entry.WriteToFile(temp, options);
+                File.Move(temp, destination, true);
+            }
+            finally
+            {
+                TryDelete(temp);
+            }
+
+            if (exists) replaced++;
+            else missing++;
+        }
+
+        return new ArchiveRepairResult(missing, replaced, preserved, unchanged);
     }
 
     internal static string ValidateTarget(string selectedPath, bool requireFresh)
@@ -381,12 +558,16 @@ internal sealed class PackInstallEngine
     {
         var mods = CombineRoot(root, "SPT_Runtime/user/mods");
         if (Directory.Exists(mods) && Directory.EnumerateFileSystemEntries(mods).Any())
-            throw new InvalidOperationException("Existing server mods were found. Use a fresh SPT 4.1.3 install.");
+            throw new InvalidOperationException(
+                "Existing server mods were found. Use Verify Mod Pack Install for an existing pack, " +
+                "or select a fresh SPT 4.1.3 folder.");
 
         var plugins = CombineRoot(root, "BepInEx/plugins");
         if (Directory.Exists(plugins) && Directory.EnumerateFileSystemEntries(plugins)
                 .Any(path => !Path.GetFileName(path).Equals("spt", StringComparison.OrdinalIgnoreCase)))
-            throw new InvalidOperationException("Existing third-party BepInEx plugins were found.");
+            throw new InvalidOperationException(
+                "Existing third-party BepInEx plugins were found. Use Verify Mod Pack Install for an existing pack, " +
+                "or select a fresh SPT 4.1.3 folder.");
 
         var patchers = CombineRoot(root, "BepInEx/patchers");
         var allowed = new HashSet<string>(["spt-prepatch.dll", "FixPluginTypesSerialization.dll"],
@@ -429,6 +610,8 @@ internal sealed class PackInstallEngine
     {
         if (!Uri.TryCreate(bundle.Url, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps)
             throw new InvalidOperationException("The bundle URL is not valid HTTPS.");
+        if (await TryUseCachedBundleAsync(bundle, outputPath, progress, cancellationToken))
+            return;
         if (await TryPromoteCompletedPartAsync(bundle, outputPath, progress, cancellationToken))
             return;
 
@@ -480,6 +663,23 @@ internal sealed class PackInstallEngine
         {
             TryDelete(tempPath);
         }
+    }
+
+    private static async Task<bool> TryUseCachedBundleAsync(BundleEntry bundle, string outputPath,
+        IProgress<InstallProgress> progress, CancellationToken cancellationToken)
+    {
+        if (!File.Exists(outputPath)) return false;
+        if (new FileInfo(outputPath).Length != bundle.Bytes)
+        {
+            TryDelete(outputPath);
+            return false;
+        }
+
+        progress.Report(new(24, "Verifying cached mod pack", Path.GetFileName(outputPath)));
+        var hash = await Sha256FileAsync(outputPath, cancellationToken);
+        if (hash.Equals(bundle.Sha256, StringComparison.OrdinalIgnoreCase)) return true;
+        TryDelete(outputPath);
+        return false;
     }
 
     private static async Task<bool> TryPromoteCompletedPartAsync(BundleEntry bundle, string outputPath,
@@ -726,6 +926,32 @@ internal sealed class PackInstallEngine
     private static string CombineRoot(string root, string relative) =>
         Path.Combine(root, NormalizeArchivePath(relative).Replace('/', Path.DirectorySeparatorChar));
 
+    private static bool IsManagedRuntimePath(string relative) =>
+        relative.StartsWith("BepInEx/", StringComparison.OrdinalIgnoreCase) ||
+        relative.StartsWith("SPT_Runtime/", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsUserMutableConfiguration(string relative)
+    {
+        var normalized = NormalizeArchivePath(relative);
+        var extension = Path.GetExtension(normalized);
+        var configExtension = extension.Equals(".cfg", StringComparison.OrdinalIgnoreCase) ||
+                              extension.Equals(".ini", StringComparison.OrdinalIgnoreCase) ||
+                              extension.Equals(".json", StringComparison.OrdinalIgnoreCase) ||
+                              extension.Equals(".jsonc", StringComparison.OrdinalIgnoreCase) ||
+                              extension.Equals(".toml", StringComparison.OrdinalIgnoreCase) ||
+                              extension.Equals(".yaml", StringComparison.OrdinalIgnoreCase) ||
+                              extension.Equals(".yml", StringComparison.OrdinalIgnoreCase);
+        if (!configExtension) return false;
+
+        var fileName = Path.GetFileName(normalized);
+        return normalized.StartsWith("BepInEx/config/", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Contains("/config/", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Contains("/configs/", StringComparison.OrdinalIgnoreCase) ||
+               fileName.Equals("config.json", StringComparison.OrdinalIgnoreCase) ||
+               fileName.Equals("config.jsonc", StringComparison.OrdinalIgnoreCase) ||
+               fileName.Equals("settings.json", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static bool IsSymbolicLink(SharpCompress.Common.IEntry entry)
     {
         if (!string.IsNullOrWhiteSpace(entry.LinkTarget)) return true;
@@ -761,6 +987,12 @@ internal sealed class PackInstallEngine
     }
 
     internal sealed record InstallProgress(int Percent, string Phase, string? Detail);
+    internal readonly record struct ArchiveRepairResult(int Missing, int Replaced, int Preserved, int Unchanged)
+    {
+        public static ArchiveRepairResult operator +(ArchiveRepairResult left, ArchiveRepairResult right) =>
+            new(left.Missing + right.Missing, left.Replaced + right.Replaced,
+                left.Preserved + right.Preserved, left.Unchanged + right.Unchanged);
+    }
     internal static InstallProgress MapDownloadedBundleProgress(InstallProgress update) =>
         update with { Percent = 25 + Math.Clamp(update.Percent, 0, 100) * 75 / 100 };
 

@@ -29,4 +29,18 @@ public sealed class UiThreadBoundaryTests
 
         Assert.Equal("/home/anthony/Games/SPT", result);
     }
+
+    [Fact]
+    public void ExpectedValidationErrorsAreShownWithoutAStackTrace()
+    {
+        var error = new InvalidOperationException(
+            "Existing server mods were found. Use Verify Mod Pack Install for an existing pack.");
+
+        var formatted = MainWindow.FormatOperationError(error);
+
+        Assert.Equal(
+            "ERROR: Existing server mods were found. Use Verify Mod Pack Install for an existing pack.",
+            formatted);
+        Assert.DoesNotContain(" at ", formatted, StringComparison.Ordinal);
+    }
 }

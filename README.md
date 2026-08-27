@@ -3,7 +3,7 @@
 Native Windows and Linux GUI installer and hotfix utility for the private SPT 4.1.3 friends pack.
 
 > **Important:** Release 1.1.2 omitted Avalonia's native renderer libraries and can exit before opening its window.
-> Download 1.1.8 or newer manually. Earlier Linux builds had native-runtime, UI-thread, EFT-validation, automatic-relaunch, progress-display, completed-download verification, or Windows-separator extraction defects.
+> Download 1.1.9 or newer manually. Earlier Linux builds had native-runtime, UI-thread, EFT-validation, automatic-relaunch, progress-display, completed-download verification, or Windows-separator extraction defects.
 
 ## Download
 
@@ -28,6 +28,8 @@ The updater checks the latest GitHub release when it opens. It selects the Windo
 
 Use **Apply Hotfix** to update Item Preview QoL in an existing compatible installation.
 
+Use **Verify Mod Pack Install** on an existing pack to verify every managed runtime file against the signed archive set. Missing files are restored and hash-mismatched files are replaced. Existing user configuration files and unrelated files are preserved. The verified bundle remains in the updater cache so later verification runs can reuse it without downloading it again.
+
 ## Full-pack installation
 
 1. Start with a fresh combined SPT 4.1.3 installation backed by EFT build 40743.
@@ -40,6 +42,8 @@ The updater validates the target version and existing-mod state. It downloads th
 Version 1.1.7 closes the download stream before SHA-256 verification. It also detects, verifies, and reuses a complete `.part` file left by version 1.1.6 instead of downloading the pack again.
 
 Version 1.1.8 normalizes Windows archive separators before writing files on Linux. Its **Repair Linux install** action repairs and audits a version 1.1.7 installation that already reached the final audit without downloading the pack again.
+
+Version 1.1.9 makes Linux repair idempotent and ignores non-runtime source artifacts left by version 1.1.7. It also adds full managed-file verification and concise, user-facing validation errors.
 
 ## Build
 

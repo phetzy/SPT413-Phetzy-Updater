@@ -11,6 +11,7 @@ internal sealed class MainWindow : Window
     private readonly TextBox _installPath = new() { PlaceholderText = "Select the combined SPT 4.1.3 folder" };
     private readonly Button _browse = new() { Content = "Browse…" };
     private readonly Button _install = new() { Content = "Fresh install from private pack" };
+    private readonly Button _verify = new() { Content = "Verify Mod Pack Install" };
     private readonly Button _hotfix = new() { Content = "Apply Hotfix" };
     private readonly Button _repair = new()
     {
@@ -50,7 +51,7 @@ internal sealed class MainWindow : Window
         var explanation = new TextBlock
         {
             Text = "Validates SPT 4.1.3 / EFT 40743, downloads the signed private pack, verifies every archive, " +
-                   "and installs it with native Windows or Linux extraction.",
+                   "and installs or repairs it with native Windows or Linux extraction.",
             TextWrapping = Avalonia.Media.TextWrapping.Wrap
         };
         var pathGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 10 };
@@ -60,9 +61,23 @@ internal sealed class MainWindow : Window
 
         var buttons = new StackPanel
         {
-            Orientation = Orientation.Horizontal,
+            Orientation = Orientation.Vertical,
             Spacing = 10,
-            Children = { _install, _hotfix, _repair, _checkUpdater }
+            Children =
+            {
+                new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 10,
+                    Children = { _install, _verify, _hotfix }
+                },
+                new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 10,
+                    Children = { _repair, _checkUpdater }
+                }
+            }
         };
 
         var layout = new Grid
@@ -81,6 +96,7 @@ internal sealed class MainWindow : Window
 
         _browse.Click += BrowseClicked;
         _install.Click += InstallClicked;
+        _verify.Click += VerifyClicked;
         _hotfix.Click += HotfixClicked;
         _repair.Click += RepairClicked;
         _checkUpdater.Click += CheckUpdaterClicked;
@@ -114,6 +130,14 @@ internal sealed class MainWindow : Window
             () => _installPath.Text ?? "",
             (installPath, reporter) =>
                 Task.FromResult(_engine.ApplyHotfix(installPath, reporter))));
+    }
+
+    private async void VerifyClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        await RunAsync(BindPathOperation(
+            () => _installPath.Text ?? "",
+            async (installPath, reporter) =>
+                await _engine.VerifyAndRepairFromChannelAsync(installPath, reporter)));
     }
 
     private async void RepairClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -198,14 +222,14 @@ internal sealed class MainWindow : Window
             var result = await Task.Run(async () => await operation(reporter));
             _phase.Text = "Complete";
             _detail.Text = result;
-            await ShowMessageAsync("Installation complete", result);
+            await ShowMessageAsync("Operation complete", result);
         }
         catch (Exception ex)
         {
             _phase.Text = "Stopped";
             _detail.Text = ex.Message;
-            _log.Text += $"ERROR: {ex}\n";
-            await ShowMessageAsync("Installation stopped", ex.Message);
+            _log.Text += FormatOperationError(ex) + "\n";
+            await ShowMessageAsync("Operation stopped", ex.Message);
         }
         finally
         {
@@ -217,10 +241,15 @@ internal sealed class MainWindow : Window
     {
         _browse.IsEnabled = enabled;
         _install.IsEnabled = enabled;
+        _verify.IsEnabled = enabled;
         _hotfix.IsEnabled = enabled;
         _repair.IsEnabled = enabled;
         _checkUpdater.IsEnabled = enabled;
     }
+
+    internal static string FormatOperationError(Exception exception) => exception is InvalidOperationException
+        ? $"ERROR: {exception.Message}"
+        : $"ERROR: {exception}";
 
     private async Task ShowMessageAsync(string title, string message)
     {

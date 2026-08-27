@@ -74,6 +74,38 @@ public sealed class ArchiveExtractionTests : IDisposable
     }
 
     [Fact]
+    public void VerifyRepairsMissingAndCorruptFilesButPreservesExistingConfiguration()
+    {
+        var archivePath = CreateArchive(
+            ("BepInEx/plugins/good.dll", "good payload"),
+            ("BepInEx/plugins/broken.dll", "repaired payload"),
+            ("SPT_Runtime/user/mods/example/missing.dll", "restored payload"),
+            ("BepInEx/config/example.cfg", "pack default"),
+            ("SOURCE/Plugin.cs", "non-runtime source"));
+        var output = Path.Combine(_root, "verify-output");
+        Directory.CreateDirectory(Path.Combine(output, "BepInEx", "plugins"));
+        Directory.CreateDirectory(Path.Combine(output, "BepInEx", "config"));
+        File.WriteAllText(Path.Combine(output, "BepInEx", "plugins", "good.dll"), "good payload");
+        File.WriteAllText(Path.Combine(output, "BepInEx", "plugins", "broken.dll"), "corrupt payload");
+        File.WriteAllText(Path.Combine(output, "BepInEx", "config", "example.cfg"), "friend setting");
+
+        var result = PackInstallEngine.RepairManagedFilesFromArchive(archivePath, output);
+
+        Assert.Equal(1, result.Missing);
+        Assert.Equal(1, result.Replaced);
+        Assert.Equal(1, result.Preserved);
+        Assert.Equal("good payload",
+            File.ReadAllText(Path.Combine(output, "BepInEx", "plugins", "good.dll")));
+        Assert.Equal("repaired payload",
+            File.ReadAllText(Path.Combine(output, "BepInEx", "plugins", "broken.dll")));
+        Assert.Equal("restored payload",
+            File.ReadAllText(Path.Combine(output, "SPT_Runtime", "user", "mods", "example", "missing.dll")));
+        Assert.Equal("friend setting",
+            File.ReadAllText(Path.Combine(output, "BepInEx", "config", "example.cfg")));
+        Assert.False(File.Exists(Path.Combine(output, "SOURCE", "Plugin.cs")));
+    }
+
+    [Fact]
     public void RejectsTraversalBeforeWritingAnyFiles()
     {
         var archivePath = CreateArchive(
