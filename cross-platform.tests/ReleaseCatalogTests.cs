@@ -63,6 +63,18 @@ public sealed class ReleaseCatalogTests
         Assert.Throws<InvalidOperationException>(() => PackInstallEngine.ValidateReleaseCatalog(catalog));
     }
 
+    [Fact]
+    public void ValidateReleaseCatalog_RejectsModChangeWithoutDetails()
+    {
+        var release = Release("spt413-phetzy.1-8e2373c84043", "available") with
+        {
+            Changes = [new PackInstallEngine.ModChange("MoreBotsAPI", "2.0.1", "2.0.2", [])]
+        };
+
+        Assert.Throws<InvalidOperationException>(() =>
+            PackInstallEngine.ValidateReleaseCatalog(Catalog(release)));
+    }
+
     private static PackInstallEngine.ReleaseCatalog Catalog(params PackInstallEngine.PackRelease[] releases) =>
         new(1, "spt413", PackInstallEngine.ExpectedSptVersion, PackInstallEngine.ExpectedEftVersion,
             "spt413-phetzy.1-8e2373c84043", releases.ToList());

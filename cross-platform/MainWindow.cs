@@ -8,6 +8,8 @@ namespace Phetzy.Spt413Updater.CrossPlatform;
 internal sealed class MainWindow : Window
 {
     private readonly PackInstallEngine _engine = new();
+    private readonly ChangelogStateStore _changelogState = new();
+    private PackInstallEngine.PackRelease? _currentRelease;
     private readonly TextBox _installPath = new() { PlaceholderText = "Select the combined SPT 4.1.3 folder" };
     private readonly Button _browse = new() { Content = "Browse…" };
     private readonly Button _install = new() { Content = "Fresh install from private pack" };
@@ -27,6 +29,11 @@ internal sealed class MainWindow : Window
     private readonly Button _restoreRelease = new()
     {
         Content = "Restore selected release",
+        IsVisible = false
+    };
+    private readonly Button _viewChangelog = new()
+    {
+        Content = "View changelog",
         IsVisible = false
     };
     private readonly Button _checkUpdater = new() { Content = "Check for updater updates" };
@@ -92,7 +99,7 @@ internal sealed class MainWindow : Window
                 {
                     Orientation = Orientation.Horizontal,
                     Spacing = 10,
-                    Children = { _release, _restoreRelease }
+                    Children = { _release, _restoreRelease, _viewChangelog }
                 }
             }
         };
@@ -117,11 +124,15 @@ internal sealed class MainWindow : Window
         _hotfix.Click += HotfixClicked;
         _repair.Click += RepairClicked;
         _restoreRelease.Click += RestoreReleaseClicked;
+        _viewChangelog.Click += ViewChangelogClicked;
         _checkUpdater.Click += CheckUpdaterClicked;
         Opened += async (_, _) =>
         {
             await CheckForUpdaterUpdateAsync(showCurrentMessage: false);
             await LoadReleaseHistoryAsync();
+            if (_currentRelease is not null &&
+                _changelogState.ShouldShow(_currentRelease.ReleaseId, CurrentUpdaterVersion()))
+                await ShowChangelogAsync(_currentRelease);
         };
     }
 
@@ -140,10 +151,11 @@ internal sealed class MainWindow : Window
 
     private async void InstallClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        await RunAsync(BindPathOperation(
+        var success = await RunAsync(BindPathOperation(
             () => _installPath.Text ?? "",
             async (installPath, reporter) =>
                 await _engine.InstallFromChannelAsync(installPath, reporter)));
+        if (success && _currentRelease is not null) await ShowChangelogAsync(_currentRelease);
     }
 
     private async void HotfixClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -156,10 +168,11 @@ internal sealed class MainWindow : Window
 
     private async void VerifyClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        await RunAsync(BindPathOperation(
+        var success = await RunAsync(BindPathOperation(
             () => _installPath.Text ?? "",
             async (installPath, reporter) =>
                 await _engine.VerifyAndRepairFromChannelAsync(installPath, reporter)));
+        if (success && _currentRelease is not null) await ShowChangelogAsync(_currentRelease);
     }
 
     private async void RepairClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -178,8 +191,10 @@ internal sealed class MainWindow : Window
             if (releases.Count == 0) return;
             _release.ItemsSource = releases;
             _release.SelectedIndex = 0;
+            _currentRelease = releases.Single(release => release.IsCurrent);
             _release.IsVisible = true;
             _restoreRelease.IsVisible = true;
+            _viewChangelog.IsVisible = true;
         }
         catch (Exception ex)
         {
@@ -196,10 +211,17 @@ internal sealed class MainWindow : Window
             "Restore");
         if (!answer) return;
 
-        await RunAsync(BindPathOperation(
+        var success = await RunAsync(BindPathOperation(
             () => _installPath.Text ?? "",
             async (installPath, reporter) =>
                 await _engine.RestoreReleaseAsync(installPath, release, reporter)));
+        if (success) await ShowChangelogAsync(release);
+    }
+
+    private async void ViewChangelogClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        var release = _release.SelectedItem as PackInstallEngine.PackRelease ?? _currentRelease;
+        if (release is not null) await ShowChangelogAsync(release);
     }
 
     internal static Func<IProgress<PackInstallEngine.InstallProgress>, Task<string>> BindPathOperation(
@@ -232,12 +254,12 @@ internal sealed class MainWindow : Window
                 $"Updater {release.TagName} is available. Download, verify, install, and restart it now?");
             if (!answer) return;
 
-            await RunAsync(async reporter =>
+            var success = await RunAsync(async reporter =>
             {
                 await UpdaterSelfUpdate.DownloadVerifyAndLaunchAsync(release, reporter);
                 return "The verified updater is staged. This process will now close.";
             });
-            Environment.Exit(0);
+            if (success) Environment.Exit(0);
         }
         catch (Exception ex)
         {
@@ -250,7 +272,7 @@ internal sealed class MainWindow : Window
         }
     }
 
-    private async Task RunAsync(Func<IProgress<PackInstallEngine.InstallProgress>, Task<string>> operation)
+    private async Task<bool> RunAsync(Func<IProgress<PackInstallEngine.InstallProgress>, Task<string>> operation)
     {
         SetEnabled(false);
         _log.Text = "";
@@ -277,6 +299,7 @@ internal sealed class MainWindow : Window
             _phase.Text = "Complete";
             _detail.Text = result;
             await ShowMessageAsync("Operation complete", result);
+            return true;
         }
         catch (Exception ex)
         {
@@ -284,6 +307,7 @@ internal sealed class MainWindow : Window
             _detail.Text = ex.Message;
             _log.Text += FormatOperationError(ex) + "\n";
             await ShowMessageAsync("Operation stopped", ex.Message);
+            return false;
         }
         finally
         {
@@ -300,7 +324,48 @@ internal sealed class MainWindow : Window
         _repair.IsEnabled = enabled;
         _release.IsEnabled = enabled;
         _restoreRelease.IsEnabled = enabled;
+        _viewChangelog.IsEnabled = enabled;
         _checkUpdater.IsEnabled = enabled;
+    }
+
+    internal static string CurrentUpdaterVersion() =>
+        typeof(MainWindow).Assembly.GetName().Version?.ToString() ?? "unknown";
+
+    private async Task ShowChangelogAsync(PackInstallEngine.PackRelease release)
+    {
+        var close = new Button { Content = "Close", HorizontalAlignment = HorizontalAlignment.Right, MinWidth = 90 };
+        var changelog = new TextBox
+        {
+            Text = ChangelogStateStore.Format(release),
+            IsReadOnly = true,
+            AcceptsReturn = true,
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+            MinHeight = 280,
+            MaxHeight = 520
+        };
+        ScrollViewer.SetVerticalScrollBarVisibility(
+            changelog,
+            Avalonia.Controls.Primitives.ScrollBarVisibility.Auto);
+        var dialog = new Window
+        {
+            Title = "Modpack changelog",
+            Width = 720,
+            Height = 600,
+            MinWidth = 520,
+            MinHeight = 400,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Content = new Grid
+            {
+                Margin = new Thickness(20),
+                RowDefinitions = new RowDefinitions("*,Auto"),
+                RowSpacing = 16,
+                Children = { changelog, close }
+            }
+        };
+        Grid.SetRow(close, 1);
+        close.Click += (_, _) => dialog.Close();
+        await dialog.ShowDialog(this);
+        _changelogState.MarkShown(release.ReleaseId, CurrentUpdaterVersion());
     }
 
     internal static string FormatOperationError(Exception exception) => exception is InvalidOperationException

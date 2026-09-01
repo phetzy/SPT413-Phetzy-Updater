@@ -867,6 +867,13 @@ internal sealed class PackInstallEngine
                 manifestUri.Scheme != Uri.UriSchemeHttps ||
                 release.Status is not ("available" or "withdrawn"))
                 throw new InvalidOperationException($"The release catalog entry is invalid: {release.ReleaseId}");
+            foreach (var change in release.Changes ?? [])
+            {
+                if (string.IsNullOrWhiteSpace(change.Mod) || change.Details is null ||
+                    change.Details.Count == 0 || change.Details.Any(string.IsNullOrWhiteSpace))
+                    throw new InvalidOperationException(
+                        $"The release changelog is invalid: {release.ReleaseId}");
+            }
         }
     }
 
@@ -1215,9 +1222,11 @@ internal sealed class PackInstallEngine
     internal sealed record ReleaseCatalog(int SchemaVersion, string Channel, string SptVersion, string EftVersion,
         string CurrentReleaseId, List<PackRelease> Releases);
     internal sealed record PackRelease(string ReleaseId, string Label, string PublishedUtc, string ManifestUrl,
-        string BundleSha256, string Status, bool IsCurrent = false)
+        string BundleSha256, string Status, bool IsCurrent = false, string? Notes = null,
+        List<ModChange>? Changes = null)
     {
         public override string ToString() => IsCurrent ? $"{Label} (current)" : Label;
     }
+    internal sealed record ModChange(string Mod, string? PreviousVersion, string? Version, List<string> Details);
     internal sealed record BundleEntry(string FileName, string Url, long Bytes, string Sha256);
 }
