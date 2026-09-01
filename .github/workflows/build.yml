@@ -164,6 +164,7 @@ jobs:
           publish/linux/SPT413-Phetzy-Updater.Linux --check-embedded-source
           publish/linux/SPT413-Phetzy-Updater.Linux --check-native-runtime
           publish/linux/SPT413-Phetzy-Updater.Linux --check-private-channel
+          publish/linux/SPT413-Phetzy-Updater.Linux --check-release-catalog
       - name: Package assets
         run: |
           version="${GITHUB_REF_NAME#v}"

@@ -18,6 +18,17 @@ internal sealed class MainWindow : Window
         Content = "Repair Linux install",
         IsVisible = OperatingSystem.IsLinux()
     };
+    private readonly ComboBox _release = new()
+    {
+        PlaceholderText = "Release history unavailable",
+        MinWidth = 280,
+        IsVisible = false
+    };
+    private readonly Button _restoreRelease = new()
+    {
+        Content = "Restore selected release",
+        IsVisible = false
+    };
     private readonly Button _checkUpdater = new() { Content = "Check for updater updates" };
     private readonly ProgressBar _progress = new() { Minimum = 0, Maximum = 100, Height = 22 };
     private readonly TextBlock _phase = new() { Text = "Select your SPT installation folder." };
@@ -76,6 +87,12 @@ internal sealed class MainWindow : Window
                     Orientation = Orientation.Horizontal,
                     Spacing = 10,
                     Children = { _repair, _checkUpdater }
+                },
+                new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 10,
+                    Children = { _release, _restoreRelease }
                 }
             }
         };
@@ -99,8 +116,13 @@ internal sealed class MainWindow : Window
         _verify.Click += VerifyClicked;
         _hotfix.Click += HotfixClicked;
         _repair.Click += RepairClicked;
+        _restoreRelease.Click += RestoreReleaseClicked;
         _checkUpdater.Click += CheckUpdaterClicked;
-        Opened += async (_, _) => await CheckForUpdaterUpdateAsync(showCurrentMessage: false);
+        Opened += async (_, _) =>
+        {
+            await CheckForUpdaterUpdateAsync(showCurrentMessage: false);
+            await LoadReleaseHistoryAsync();
+        };
     }
 
     private async void BrowseClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -146,6 +168,38 @@ internal sealed class MainWindow : Window
             () => _installPath.Text ?? "",
             (installPath, reporter) =>
                 Task.FromResult(_engine.RepairLinuxInstall(installPath, reporter))));
+    }
+
+    private async Task LoadReleaseHistoryAsync()
+    {
+        try
+        {
+            var releases = await _engine.GetAvailableReleasesAsync();
+            if (releases.Count == 0) return;
+            _release.ItemsSource = releases;
+            _release.SelectedIndex = 0;
+            _release.IsVisible = true;
+            _restoreRelease.IsVisible = true;
+        }
+        catch (Exception ex)
+        {
+            _log.Text += $"RELEASE HISTORY ERROR: {ex.Message}\n";
+        }
+    }
+
+    private async void RestoreReleaseClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (_release.SelectedItem is not PackInstallEngine.PackRelease release) return;
+        var answer = await ShowQuestionAsync(
+            "Restore mod-pack release",
+            $"Restore pack-managed files from {release.Label}? Existing user configuration and unrelated files are preserved.",
+            "Restore");
+        if (!answer) return;
+
+        await RunAsync(BindPathOperation(
+            () => _installPath.Text ?? "",
+            async (installPath, reporter) =>
+                await _engine.RestoreReleaseAsync(installPath, release, reporter)));
     }
 
     internal static Func<IProgress<PackInstallEngine.InstallProgress>, Task<string>> BindPathOperation(
@@ -244,6 +298,8 @@ internal sealed class MainWindow : Window
         _verify.IsEnabled = enabled;
         _hotfix.IsEnabled = enabled;
         _repair.IsEnabled = enabled;
+        _release.IsEnabled = enabled;
+        _restoreRelease.IsEnabled = enabled;
         _checkUpdater.IsEnabled = enabled;
     }
 
@@ -274,9 +330,9 @@ internal sealed class MainWindow : Window
         await dialog.ShowDialog(this);
     }
 
-    private async Task<bool> ShowQuestionAsync(string title, string message)
+    private async Task<bool> ShowQuestionAsync(string title, string message, string confirmText = "Update")
     {
-        var yes = new Button { Content = "Update", MinWidth = 90 };
+        var yes = new Button { Content = confirmText, MinWidth = 90 };
         var no = new Button { Content = "Not now", MinWidth = 90 };
         var result = false;
         var dialog = new Window

@@ -148,6 +148,65 @@ internal sealed class PackInstallEngine
         return "PRIVATE CHANNEL VALID";
     }
 
+    internal async Task<IReadOnlyList<PackRelease>> GetAvailableReleasesAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var source = LoadSource(required: true);
+        if (string.IsNullOrWhiteSpace(source.ReleaseCatalogUrl)) return [];
+        if (!Uri.TryCreate(source.ReleaseCatalogUrl, UriKind.Absolute, out var catalogUri) ||
+            catalogUri.Scheme != Uri.UriSchemeHttps)
+            throw new InvalidOperationException("The embedded release-catalog URL is not valid HTTPS.");
+
+        var catalogJson = await _httpClient.GetStringAsync(catalogUri, cancellationToken);
+        var catalog = JsonSerializer.Deserialize<ReleaseCatalog>(catalogJson, JsonOptions)
+                      ?? throw new InvalidOperationException("The pack release catalog is invalid.");
+        ValidateReleaseCatalog(catalog);
+        return catalog.Releases
+            .Where(release => !release.Status.Equals("withdrawn", StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(release => release.ReleaseId.Equals(catalog.CurrentReleaseId,
+                StringComparison.Ordinal))
+            .ThenByDescending(release => release.PublishedUtc)
+            .Select(release => release with
+            {
+                IsCurrent = release.ReleaseId.Equals(catalog.CurrentReleaseId, StringComparison.Ordinal)
+            })
+            .ToArray();
+    }
+
+    internal async Task<string> RestoreReleaseAsync(string selectedPath, PackRelease release,
+        IProgress<InstallProgress> progress, CancellationToken cancellationToken = default)
+    {
+        var root = ValidateTarget(selectedPath, requireFresh: false);
+        if (ReadReceiptManagedFiles(root) is null)
+            throw new InvalidOperationException(
+                "This installation predates rollback tracking. Run Verify Mod Pack Install on the current release " +
+                "once before selecting an older release.");
+        if (!Uri.TryCreate(release.ManifestUrl, UriKind.Absolute, out var manifestUri) ||
+            manifestUri.Scheme != Uri.UriSchemeHttps)
+            throw new InvalidOperationException("The selected release manifest URL is not valid HTTPS.");
+
+        progress.Report(new(3, "Downloading selected release manifest", release.ReleaseId));
+        var manifestJson = await _httpClient.GetStringAsync(manifestUri, cancellationToken);
+        var manifest = JsonSerializer.Deserialize<PackManifest>(manifestJson, JsonOptions)
+                       ?? throw new InvalidOperationException("The selected pack manifest is invalid.");
+        ValidateManifest(manifest);
+        if (!string.Equals(manifest.ReleaseId, release.ReleaseId, StringComparison.Ordinal) ||
+            !string.Equals(manifest.Bundle.Sha256, release.BundleSha256, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("The selected release does not match its immutable catalog entry.");
+
+        var cacheRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "PhetzySptUpdater", "cache");
+        Directory.CreateDirectory(cacheRoot);
+        var bundlePath = Path.Combine(cacheRoot,
+            $"{release.ReleaseId}-{Path.GetFileName(manifest.Bundle.FileName)}");
+        await DownloadBundleAsync(manifest.Bundle, bundlePath, progress, cancellationToken);
+        var restoreProgress = new InlineProgress<InstallProgress>(update =>
+            progress.Report(MapDownloadedBundleProgress(update)));
+        var result = await VerifyAndRepairFromBundleAsync(root, bundlePath, restoreProgress, cancellationToken,
+            release.ReleaseId, manifest.Bundle.Sha256);
+        return $"Restored mod-pack release {release.ReleaseId}. {result}";
+    }
+
     internal async Task<string> InstallFromChannelAsync(string selectedPath, IProgress<InstallProgress> progress,
         CancellationToken cancellationToken = default)
     {
@@ -173,7 +232,8 @@ internal sealed class PackInstallEngine
             await DownloadBundleAsync(manifest.Bundle, bundlePath, progress, cancellationToken);
             var installProgress = new InlineProgress<InstallProgress>(update =>
                 progress.Report(MapDownloadedBundleProgress(update)));
-            return await InstallFromBundleAsync(root, bundlePath, installProgress, cancellationToken);
+            return await InstallFromBundleAsync(root, bundlePath, installProgress, cancellationToken,
+                manifest.ReleaseId, manifest.Bundle.Sha256);
         }
         finally
         {
@@ -204,11 +264,13 @@ internal sealed class PackInstallEngine
 
         var verifyProgress = new InlineProgress<InstallProgress>(update =>
             progress.Report(MapDownloadedBundleProgress(update)));
-        return await VerifyAndRepairFromBundleAsync(root, bundlePath, verifyProgress, cancellationToken);
+        return await VerifyAndRepairFromBundleAsync(root, bundlePath, verifyProgress, cancellationToken,
+            manifest.ReleaseId, manifest.Bundle.Sha256);
     }
 
     internal async Task<string> InstallFromBundleAsync(string selectedPath, string bundlePath,
-        IProgress<InstallProgress> progress, CancellationToken cancellationToken = default)
+        IProgress<InstallProgress> progress, CancellationToken cancellationToken = default,
+        string? releaseId = null, string? bundleSha256 = null)
     {
         var root = ValidateTarget(selectedPath, requireFresh: true);
         if (!File.Exists(bundlePath)) throw new FileNotFoundException("The mod-pack bundle is missing.", bundlePath);
@@ -236,6 +298,7 @@ internal sealed class PackInstallEngine
 
         var scratch = Path.Combine(Path.GetTempPath(), $"phetzy-spt-install-{Guid.NewGuid():N}");
         Directory.CreateDirectory(scratch);
+        var managedFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         try
         {
             for (var index = 0; index < order.Count; index++)
@@ -244,6 +307,7 @@ internal sealed class PackInstallEngine
                 var relative = NormalizeArchivePath(order[index]);
                 var tempArchive = Path.Combine(scratch, $"{index:D2}-{Path.GetFileName(relative)}");
                 await CopyEntryAsync(entries[relative], tempArchive, cancellationToken);
+                managedFiles.UnionWith(ReadManagedPathsFromArchive(tempArchive));
                 ExtractModArchive(tempArchive, root);
                 TryDelete(tempArchive);
                 progress.Report(new(30 + (index + 1) * 58 / order.Count,
@@ -251,9 +315,10 @@ internal sealed class PackInstallEngine
             }
 
             CopyBundledSettings(entries, root);
+            managedFiles.UnionWith(BundledSettingPaths);
             progress.Report(new(91, "Auditing installed files", null));
             AuditInstall(root);
-            WriteReceipt(root);
+            WriteReceipt(root, releaseId, bundleSha256, managedFiles);
             progress.Report(new(100, "Installation complete", root));
             return "The complete SPT 4.1.3 mod pack was verified and installed.";
         }
@@ -264,7 +329,8 @@ internal sealed class PackInstallEngine
     }
 
     internal async Task<string> VerifyAndRepairFromBundleAsync(string selectedPath, string bundlePath,
-        IProgress<InstallProgress> progress, CancellationToken cancellationToken = default)
+        IProgress<InstallProgress> progress, CancellationToken cancellationToken = default,
+        string? releaseId = null, string? bundleSha256 = null)
     {
         var root = ValidateTarget(selectedPath, requireFresh: false);
         if (!File.Exists(bundlePath)) throw new FileNotFoundException("The mod-pack bundle is missing.", bundlePath);
@@ -292,6 +358,8 @@ internal sealed class PackInstallEngine
         var scratch = Path.Combine(Path.GetTempPath(), $"phetzy-spt-verify-{Guid.NewGuid():N}");
         Directory.CreateDirectory(scratch);
         var total = new ArchiveRepairResult(0, 0, 0, 0);
+        var managedFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var previousManagedFiles = ReadReceiptManagedFiles(root);
         try
         {
             for (var index = 0; index < order.Count; index++)
@@ -300,6 +368,7 @@ internal sealed class PackInstallEngine
                 var relative = NormalizeArchivePath(order[index]);
                 var tempArchive = Path.Combine(scratch, $"{index:D2}-{Path.GetFileName(relative)}");
                 await CopyEntryAsync(entries[relative], tempArchive, cancellationToken);
+                managedFiles.UnionWith(ReadManagedPathsFromArchive(tempArchive));
                 var result = RepairManagedFilesFromArchive(tempArchive, root);
                 total += result;
                 TryDelete(tempArchive);
@@ -309,13 +378,18 @@ internal sealed class PackInstallEngine
             }
 
             CopyBundledSettings(entries, root);
+            managedFiles.UnionWith(BundledSettingPaths);
+            var removed = previousManagedFiles is null
+                ? 0
+                : RemoveObsoleteManagedFiles(root, previousManagedFiles, managedFiles);
             progress.Report(new(94, "Auditing verified installation", null));
             AuditInstall(root);
-            WriteReceipt(root);
+            WriteReceipt(root, releaseId, bundleSha256, managedFiles);
             progress.Report(new(100, "Mod-pack verification complete",
-                $"Restored {total.Missing}; replaced {total.Replaced}; preserved {total.Preserved} configurations"));
+                $"Restored {total.Missing}; replaced {total.Replaced}; removed {removed}; preserved {total.Preserved} configurations"));
             return $"Mod-pack verification completed. Missing files restored: {total.Missing}. " +
-                   $"Corrupt files replaced: {total.Replaced}. Existing configurations preserved: {total.Preserved}.";
+                   $"Corrupt files replaced: {total.Replaced}. Obsolete pack files removed: {removed}. " +
+                   $"Existing configurations preserved: {total.Preserved}.";
         }
         finally
         {
@@ -766,6 +840,36 @@ internal sealed class PackInstallEngine
             throw new InvalidOperationException("The pack-manifest bundle fields are incomplete.");
     }
 
+    internal static void ValidateReleaseCatalog(ReleaseCatalog catalog)
+    {
+        if (catalog.SchemaVersion != 1 ||
+            catalog.SptVersion != ExpectedSptVersion ||
+            catalog.EftVersion != ExpectedEftVersion ||
+            string.IsNullOrWhiteSpace(catalog.Channel) ||
+            string.IsNullOrWhiteSpace(catalog.CurrentReleaseId) ||
+            catalog.Releases is null || catalog.Releases.Count == 0)
+            throw new InvalidOperationException("The release catalog is incomplete or targets another build.");
+
+        if (catalog.Releases.Select(release => release.ReleaseId)
+            .Distinct(StringComparer.Ordinal).Count() != catalog.Releases.Count)
+            throw new InvalidOperationException("The release catalog contains duplicate release identifiers.");
+        if (!catalog.Releases.Any(release =>
+                release.ReleaseId.Equals(catalog.CurrentReleaseId, StringComparison.Ordinal)))
+            throw new InvalidOperationException("The current release is absent from the release catalog.");
+
+        foreach (var release in catalog.Releases)
+        {
+            if (!Regex.IsMatch(release.ReleaseId, "^[a-z0-9]+(?:[.-][a-z0-9]+)*$") ||
+                string.IsNullOrWhiteSpace(release.Label) ||
+                !Regex.IsMatch(release.BundleSha256, "^[A-Fa-f0-9]{64}$") ||
+                !DateTimeOffset.TryParse(release.PublishedUtc, out _) ||
+                !Uri.TryCreate(release.ManifestUrl, UriKind.Absolute, out var manifestUri) ||
+                manifestUri.Scheme != Uri.UriSchemeHttps ||
+                release.Status is not ("available" or "withdrawn"))
+                throw new InvalidOperationException($"The release catalog entry is invalid: {release.ReleaseId}");
+        }
+    }
+
     private static void ValidateBundleIndex(List<string> order, Dictionary<string, string> expected,
         Dictionary<string, ZipArchiveEntry> entries)
     {
@@ -825,11 +929,7 @@ internal sealed class PackInstallEngine
 
     private static void CopyBundledSettings(Dictionary<string, ZipArchiveEntry> entries, string root)
     {
-        foreach (var relative in new[]
-                 {
-                     "SPT_Runtime/user/mods/[SVM] Server Value Modifier/Presets/LadsGOAGANE.json",
-                     "SPT_Runtime/user/mods/[SVM] Server Value Modifier/Loader/loader.json"
-                 })
+        foreach (var relative in BundledSettingPaths)
         {
             var sourceKey = NormalizeArchivePath($"settings/{relative}");
             if (!entries.TryGetValue(sourceKey, out var entry))
@@ -871,17 +971,84 @@ internal sealed class PackInstallEngine
             throw new InvalidOperationException("Greed does not select LadsGOAGANE.");
     }
 
-    private static void WriteReceipt(string root)
+    private static readonly string[] BundledSettingPaths =
+    [
+        "SPT_Runtime/user/mods/[SVM] Server Value Modifier/Presets/LadsGOAGANE.json",
+        "SPT_Runtime/user/mods/[SVM] Server Value Modifier/Loader/loader.json"
+    ];
+
+    private static IReadOnlyList<string> ReadManagedPathsFromArchive(string archivePath)
     {
+        using var archive = ArchiveFactory.OpenArchive(archivePath);
+        return archive.Entries
+            .Where(entry => !entry.IsDirectory)
+            .Select(entry => NormalizeArchivePath(entry.Key ?? ""))
+            .Where(path => !string.IsNullOrWhiteSpace(path) && IsManagedRuntimePath(path))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    internal static int RemoveObsoleteManagedFiles(string root, IEnumerable<string> previous,
+        IEnumerable<string> desired)
+    {
+        root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+        var desiredSet = desired.Select(NormalizeArchivePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var removed = 0;
+        foreach (var relative in previous.Select(NormalizeArchivePath).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (desiredSet.Contains(relative) || !IsManagedRuntimePath(relative) ||
+                IsUserMutableConfiguration(relative)) continue;
+            var path = CombineRoot(root, relative);
+            if (!IsWithin(path, root)) throw new InvalidOperationException($"Receipt path escapes the SPT folder: {relative}");
+            if (!File.Exists(path)) continue;
+            File.Delete(path);
+            removed++;
+        }
+        return removed;
+    }
+
+    private static List<string>? ReadReceiptManagedFiles(string root)
+    {
+        var path = CombineRoot(root, "SPT_Runtime/user/SPT413-ModPack-Receipt.json");
+        if (!File.Exists(path)) return null;
+        using var document = JsonDocument.Parse(File.ReadAllText(path));
+        if (!document.RootElement.TryGetProperty("ManagedFiles", out var files) ||
+            files.ValueKind != JsonValueKind.Array) return null;
+        return files.EnumerateArray().Select(item => item.GetString())
+            .Where(item => !string.IsNullOrWhiteSpace(item)).Cast<string>().ToList();
+    }
+
+    private static string? ReadReceiptString(string root, string propertyName)
+    {
+        var path = CombineRoot(root, "SPT_Runtime/user/SPT413-ModPack-Receipt.json");
+        if (!File.Exists(path)) return null;
+        using var document = JsonDocument.Parse(File.ReadAllText(path));
+        return document.RootElement.TryGetProperty(propertyName, out var value) &&
+               value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
+    }
+
+    private static void WriteReceipt(string root, string? releaseId = null, string? bundleSha256 = null,
+        IEnumerable<string>? managedFiles = null)
+    {
+        releaseId ??= ReadReceiptString(root, "ReleaseId");
+        bundleSha256 ??= ReadReceiptString(root, "BundleSha256");
+        var existingManagedFiles = managedFiles?.Select(NormalizeArchivePath)
+            .Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToArray() ?? ReadReceiptManagedFiles(root)?.ToArray();
         var receipt = new
         {
             Bundle = "SPT413-Full-Mod-Pack-spt413-phetzy.1",
+            ReleaseId = releaseId,
+            BundleSha256 = bundleSha256,
             InstalledUtc = DateTime.UtcNow.ToString("O"),
             Target = root,
             SptServerVersion = ExpectedSptVersion,
             EftVersion = ExpectedEftVersion,
             ArchiveCount = ExpectedArchiveCount,
-            InstallerPlatform = OperatingSystem.IsLinux() ? "linux-x64" : "win-x64"
+            InstallerPlatform = OperatingSystem.IsLinux() ? "linux-x64" : "win-x64",
+            ManagedFiles = existingManagedFiles
         };
         var path = CombineRoot(root, "SPT_Runtime/user/SPT413-ModPack-Receipt.json");
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -1042,7 +1209,15 @@ internal sealed class PackInstallEngine
     {
         public void Report(T value) => report(value);
     }
-    private sealed record UpdaterSource(string ManifestUrl);
-    private sealed record PackManifest(int SchemaVersion, string SptVersion, string EftVersion, BundleEntry Bundle);
+    private sealed record UpdaterSource(string ManifestUrl, string? ReleaseCatalogUrl = null);
+    private sealed record PackManifest(int SchemaVersion, string SptVersion, string EftVersion, BundleEntry Bundle,
+        string? ReleaseId = null, string? Channel = null);
+    internal sealed record ReleaseCatalog(int SchemaVersion, string Channel, string SptVersion, string EftVersion,
+        string CurrentReleaseId, List<PackRelease> Releases);
+    internal sealed record PackRelease(string ReleaseId, string Label, string PublishedUtc, string ManifestUrl,
+        string BundleSha256, string Status, bool IsCurrent = false)
+    {
+        public override string ToString() => IsCurrent ? $"{Label} (current)" : Label;
+    }
     internal sealed record BundleEntry(string FileName, string Url, long Bytes, string Sha256);
 }

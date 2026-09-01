@@ -70,6 +70,15 @@ internal static class Program
                 return 0;
             }
 
+            if (args.Length == 1 && args[0] == "--check-release-catalog")
+            {
+                var engine = new PackInstallEngine();
+                var releases = engine.GetAvailableReleasesAsync().GetAwaiter().GetResult();
+                if (releases.Count == 0) throw new InvalidOperationException("No release catalog is embedded.");
+                Console.WriteLine($"RELEASE CATALOG VALID: {releases.Count} releases");
+                return 0;
+            }
+
             if (args.Length == 2 && args[0] == "--validate")
             {
                 Console.WriteLine(PackInstallEngine.ValidateTarget(args[1], requireFresh: true));
